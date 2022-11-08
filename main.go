@@ -1,7 +1,7 @@
 package main
 
-import testplugin "github.com/clarence97/test-plugin/cmd/test-plugin"
+import "github.com/confluentinc/schema-deletion-tool/cmd"
 
 func main() {
-	testplugin.Execute()
+	cmd.Execute()
 }

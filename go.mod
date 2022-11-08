@@ -1,4 +1,4 @@
-module github.com/clarence97/test-plugin
+module github.com/confluentinc/schema-deletion-tool
 
 go 1.16
 

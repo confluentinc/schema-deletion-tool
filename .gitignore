@@ -1,4 +1,4 @@
 vendor/
 .idea/
 data/
-test-plugin
+schema-deletion-tool
