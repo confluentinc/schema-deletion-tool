@@ -85,7 +85,7 @@ func scanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, e
 		return activeSchemas, nil
 	}
 
-	for !checkIfReachesOffsets(endOffsets, offsets) {
+	for !checkIfReachesOffsets(endOffsets, offsets, DesiredNumPartitions) {
 		msg, err := consumer.ReadMessage(5 * time.Second)
 		if err != nil {
 			return nil, err
@@ -107,8 +107,8 @@ func scanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, e
 	return activeSchemas, nil
 }
 
-func checkIfReachesOffsets(endOffsets, offsets map[int32]kafka.Offset) bool {
-	for i := int32(0); i < 6; i++ {
+func checkIfReachesOffsets(endOffsets, offsets map[int32]kafka.Offset, partitions int32) bool {
+	for i := int32(0); i < partitions; i++ {
 		val, ok := offsets[i]
 		if !ok {
 			val = -1

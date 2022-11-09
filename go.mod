@@ -8,5 +8,6 @@ require (
 	github.com/inconshreveable/mousetrap v1.0.1 // indirect
 	github.com/jedib0t/go-pretty/v6 v6.4.0
 	github.com/spf13/cobra v1.5.0
+	github.com/stretchr/testify v1.8.1 // indirect
 	golang.org/x/crypto v0.0.0-20221005025214-4161e89ecf1b // indirect
 )
