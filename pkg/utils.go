@@ -141,11 +141,11 @@ func ContainsTopic(topic string, topics []string) bool {
 }
 
 func IsYes(resp string) bool {
-	return resp == "Y" || resp == "yes" || resp == "Yes" || resp == "YES"
+	return resp == "Y" || resp == "y" || resp == "yes" || resp == "Yes" || resp == "YES"
 }
 
 func IsNo(resp string) bool {
-	return resp == "N" || resp == "no" || resp == "No" || resp == "NO"
+	return resp == "N" || resp == "n" || resp == "no" || resp == "No" || resp == "NO"
 }
 
 func IsValidChoice(resp string) bool {
