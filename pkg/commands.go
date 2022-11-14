@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,7 +12,8 @@ func GetAllEligibleSubjects() ([]string, error) {
 	var subjects []string
 	output, err := ExecuteCommand(Confluent, []string{"schema-registry", "subject", "list", "-o", "json"}, false)
 	if err != nil {
-		return nil, err
+		return nil, errors.New(`error while listing Schema Registry subjects. Check you have proper credentials` +
+			` stored by running any Schema Registry command, e.g. "confluent schema-registry subject list"`)
 	}
 	var _subjects []map[string]string
 	err = json.Unmarshal(output, &_subjects)
@@ -80,7 +82,8 @@ func GetAllSchemas(ctx *Context) ([]SchemaInfo, error) {
 		fmt.Printf("Scanning schemas under subject %s...", subject)
 		output, err := ExecuteCommand(Confluent, []string{"schema-registry", "schema", "list", "--subject-prefix", subject, "-o", "json"}, false)
 		if err != nil {
-			return nil, err
+			return nil, errors.New(`error while listing all schemas. Check you have proper credentials` +
+				` stored by running any Schema Registry command, e.g. "confluent schema-registry subject list"`)
 		}
 		if err = json.Unmarshal(output, &_schemas); err != nil {
 			return nil, err
