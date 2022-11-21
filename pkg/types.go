@@ -4,7 +4,7 @@ const (
 	MagicByte     = 0
 	MessageOffset = 5
 
-	Confluent = "/Users/jtian/code/cli/dist/confluent_darwin_amd64/confluent"
+	Confluent = "confluent"
 
 	GREEN = "\033[32m"
 	RED   = "\033[31m"
