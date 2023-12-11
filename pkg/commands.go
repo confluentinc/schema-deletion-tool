@@ -149,7 +149,7 @@ func scanTopics(topics []TopicWithClusterInfo, ctx *Context) (map[int32]int, err
 func SelectDeletionCandidates(schemas []SchemaInfo, usedSchemas map[int32]int) ([]SchemaInfo, error) {
 	var candidates []SchemaInfo
 	for _, schema := range schemas {
-		schemaId, _ := strconv.ParseInt(schema.SchemaID, 10, 32)
+		var schemaId, _ = strconv.Atoi(string(schema.SchemaID))
 		if IsKeySchema(schema.Subject) {
 			if usedSchemas[int32(schemaId)]&KEYONLY == 0 {
 				candidates = append(candidates, schema)
@@ -207,7 +207,7 @@ func SelectDeletionCandidates(schemas []SchemaInfo, usedSchemas map[int32]int) (
 func DeleteSchemas(schemas []SchemaInfo) error {
 	var err error
 	for _, schema := range schemas {
-		_, err = ExecuteCommand(Confluent, []string{"schema-registry", "schema", "delete", "--subject", schema.Subject, "--version", schema.Version}, true)
+		_, err = ExecuteCommand(Confluent, []string{"schema-registry", "schema", "delete", "--subject", schema.Subject, "--version", string(schema.Version), "--force"}, true)
 		if err != nil {
 			return err
 		}
@@ -226,7 +226,7 @@ func DeleteSchemas(schemas []SchemaInfo) error {
 	}
 	if IsYes(resp) {
 		for _, schema := range schemas {
-			_, err = ExecuteCommand(Confluent, []string{"schema-registry", "schema", "delete", "--subject", schema.Subject, "--version", schema.Version, "-P"}, true)
+			_, err = ExecuteCommand(Confluent, []string{"schema-registry", "schema", "delete", "--subject", schema.Subject, "--version", string(schema.Version), "--permanent", "--force"}, true)
 			if err != nil {
 				return err
 			}

@@ -1,5 +1,9 @@
 package pkg
 
+import(
+	"encoding/json"
+)
+
 const (
 	MagicByte     = 0
 	MessageOffset = 5
@@ -41,9 +45,9 @@ type TopicWithClusterInfo struct {
 }
 
 type SchemaInfo struct {
-	SchemaID string `json:"schema_id"`
-	Subject  string `json:"subject"`
-	Version  string `json:"version"`
+	SchemaID json.Number	`json:"schema_id"`
+	Subject  string			`json:"subject"`
+	Version  json.Number	`json:"version"`
 }
 
 type Credentials struct {
