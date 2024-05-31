@@ -31,6 +31,10 @@ func run(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	nonInteractive, err := cmd.Flags().GetBool("yes")
+	if err != nil {
+		return err
+	}
 	ctx, err := pkg.NewContext(configFile)
 	if err != nil {
 		return err
@@ -39,7 +43,7 @@ func run(cmd *cobra.Command, _ []string) error {
 	ctx.Topics = topics
 
 	// Traverse all clusters in the current environment and prompt for credentials.
-	err = pkg.ListClusters(ctx)
+	err = pkg.ListClusters(ctx, nonInteractive)
 	if err != nil {
 		return err
 	}
@@ -57,11 +61,11 @@ func run(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Prompt users to delete schemas they want to soft/hard delete.
-	selection, err := pkg.SelectDeletionCandidates(schemas, activeSchemas)
+	selection, err := pkg.SelectDeletionCandidates(schemas, activeSchemas, nonInteractive)
 	if err != nil {
 		return err
 	}
-	err = pkg.DeleteSchemas(selection)
+	err = pkg.DeleteSchemas(selection, nonInteractive)
 	if err != nil {
 		return err
 	}
@@ -79,6 +83,7 @@ func Execute() {
 	rootCmd.Flags().StringP("subject", "V", "", "Subject to clean up schemas from.")
 	rootCmd.Flags().Bool("all", false, "Clean up all eligible subjects.")
 	rootCmd.Flags().String("config-file", "", "Path to config file containing credentials for Kafka clusters.")
+	rootCmd.Flags().BoolP("yes", "y", false, "[DANGER] Don't prompt for user input and agree to hard-delete all prompted schemas.")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

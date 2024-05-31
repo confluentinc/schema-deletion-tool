@@ -2,3 +2,4 @@ vendor/
 .idea/
 data/
 schema-deletion-tool
+confluent-schema_registry-cleanup
