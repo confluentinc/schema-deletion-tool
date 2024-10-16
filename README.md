@@ -7,6 +7,8 @@ The schema deletion tool (plugin) relies on Confluent CLI for functionalities su
 logging in, setting up environments and so on. Refer to [Usage](#Usage) for an example. Also refer
 to [Confluent CLI Plugin](https://docs.confluent.io/confluent-cli/current/command-reference/plugin/index.html) for more information.
 
+_Note: Version 4 of the Confluent CLI is required. You can check the version you have installed by running `confluent version`_
+
 ## Contribution
 All contributions are welcomed! Follow the below guidance to set up development environment, build and test
 before sending out the PR.
