@@ -45,9 +45,9 @@ type TopicWithClusterInfo struct {
 }
 
 type SchemaInfo struct {
-	SchemaID json.Number	`json:"schema_id"`
-	Subject  string			`json:"subject"`
-	Version  json.Number	`json:"version"`
+	SchemaID json.Number `json:"id"`
+	Subject  string      `json:"subject"`
+	Version  json.Number `json:"version"`
 }
 
 type Credentials struct {
