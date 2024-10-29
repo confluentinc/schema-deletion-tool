@@ -113,8 +113,7 @@ func checkIfReachesOffsets(endOffsets, offsets map[int32]kafka.Offset, partition
 		if !ok {
 			val = -1
 		}
-		endVal, _ := endOffsets[i]
-		if val < endVal {
+		if val < endOffsets[i] {
 			return false
 		}
 	}

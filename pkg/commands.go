@@ -28,7 +28,7 @@ func GetAllEligibleSubjects() ([]string, error) {
 	return subjects, nil
 }
 
-func ListClusters(ctx *Context) error {
+func ListClusters(ctx *Context, nonInteractive bool) error {
 	fmt.Println("Listing all clusters under the environment...")
 	output, err := ExecuteCommand(Confluent, []string{"kafka", "cluster", "list", "-o", "json"}, false)
 	if err != nil {
@@ -41,6 +41,14 @@ func ListClusters(ctx *Context) error {
 	}
 
 	PrintTable(KafkaClusterFields, clusters, false)
+	if nonInteractive {
+		fmt.Print("Won't do the cluster skipping as non-interactive mode is enabled.\n")
+		var clusterIDs []string
+		for _, kafkaCluster := range clusters {
+			clusterIDs = append(clusterIDs, kafkaCluster.ID)
+		}
+		return ctx.SetClusters(clusterIDs)
+	}
 
 	fmt.Print("Please select the clusters you want to skip, with cluster IDs separated by comma: ")
 	resp, err := ReadLine()
@@ -126,6 +134,9 @@ func scanTopics(topics []TopicWithClusterInfo, ctx *Context) (map[int32]int, err
 	for _, topic := range topics {
 		fmt.Printf("Scanning topic %s%s%s from cluster %s...\n", GREEN, topic.Topic, RESET, topic.ClusterID)
 		output, err := ExecuteCommand(Confluent, []string{"kafka", "cluster", "describe", topic.ClusterID, "-o", "json"}, false)
+		if err != nil {
+			return nil, err
+		}
 		var cluster map[string]interface{}
 		if err = json.Unmarshal(output, &cluster); err != nil {
 			return nil, err
@@ -134,7 +145,6 @@ func scanTopics(topics []TopicWithClusterInfo, ctx *Context) (map[int32]int, err
 		if err != nil {
 			return nil, err
 		}
-
 		_activeSchemas, err := scanActiveSchemas(consumer, topic.Topic)
 		if err != nil {
 			return nil, err
@@ -146,7 +156,7 @@ func scanTopics(topics []TopicWithClusterInfo, ctx *Context) (map[int32]int, err
 	return activeSchemas, nil
 }
 
-func SelectDeletionCandidates(schemas []SchemaInfo, usedSchemas map[int32]int) ([]SchemaInfo, error) {
+func SelectDeletionCandidates(schemas []SchemaInfo, usedSchemas map[int32]int, nonInteractive bool) ([]SchemaInfo, error) {
 	var candidates []SchemaInfo
 	for _, schema := range schemas {
 		var schemaId, _ = strconv.Atoi(string(schema.SchemaID))
@@ -162,6 +172,10 @@ func SelectDeletionCandidates(schemas []SchemaInfo, usedSchemas map[int32]int) (
 	}
 	fmt.Printf("Following %d schemas are unused schemas that qualify for deletion.\n", len(candidates))
 	PrintTable(SchemaInfoFields, candidates, true)
+	if nonInteractive {
+		fmt.Printf("Non-interactive mode is enabled, won't prompt for deletion confirmation.\n")
+		return candidates, nil
+	}
 
 	var selection []SchemaInfo
 	for {
@@ -204,13 +218,29 @@ func SelectDeletionCandidates(schemas []SchemaInfo, usedSchemas map[int32]int) (
 	return selection, nil
 }
 
-func DeleteSchemas(schemas []SchemaInfo) error {
+func HardDeleteSchemas(schemas []SchemaInfo) error {
+	var err error
+	for _, schema := range schemas {
+		_, err = ExecuteCommand(Confluent, []string{"schema-registry", "schema", "delete", "--subject", schema.Subject, "--version", string(schema.Version), "--permanent", "--force"}, true)
+		if err != nil {
+			return err
+		}
+	}
+	fmt.Printf("Cleaned up a total of %d schemas.\n", len(schemas))
+	return nil
+}
+
+func DeleteSchemas(schemas []SchemaInfo, nonInteractive bool) error {
 	var err error
 	for _, schema := range schemas {
 		_, err = ExecuteCommand(Confluent, []string{"schema-registry", "schema", "delete", "--subject", schema.Subject, "--version", string(schema.Version), "--force"}, true)
 		if err != nil {
 			return err
 		}
+	}
+	if nonInteractive {
+		fmt.Print("Non-interactive mode is enabled, won't prompt for hard deletion confirmation.\n")
+		return HardDeleteSchemas(schemas)
 	}
 	var resp string
 	for {
@@ -225,13 +255,7 @@ func DeleteSchemas(schemas []SchemaInfo) error {
 		}
 	}
 	if IsYes(resp) {
-		for _, schema := range schemas {
-			_, err = ExecuteCommand(Confluent, []string{"schema-registry", "schema", "delete", "--subject", schema.Subject, "--version", string(schema.Version), "--permanent", "--force"}, true)
-			if err != nil {
-				return err
-			}
-		}
-		fmt.Printf("Cleaned up a total of %d schemas.\n", len(schemas))
+		return HardDeleteSchemas(schemas)
 	}
 	return nil
 }
