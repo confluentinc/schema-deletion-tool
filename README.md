@@ -146,11 +146,29 @@ For mTLS, add SSL paths to the SR config and/or cluster config:
 
 ### Schema Contexts
 
-    # Scope to a specific context
+Schema contexts allow you to organize schemas into isolated namespaces using the
+`:.context:` prefix (e.g., `:.staging:orders-value`, `:.production:orders-value`).
+
+    # Process ALL contexts (default — no --context flag)
+    # Includes default context (no prefix) and all named contexts
+    ./schema-deletion-tool --all --dry-run
+
+    # Scope to a specific named context only
     ./schema-deletion-tool --all --context staging
 
-    # Works with any platform
+    # Scope to the default context only (subjects without any context prefix)
+    ./schema-deletion-tool --all --context ""
+
+    # Works with any platform and strategy
     ./schema-deletion-tool --platform cp --cp-config-file config.json --all --context production
+
+    # Clean up an entire context
+    ./schema-deletion-tool --platform cp --cp-config-file config.json --all --context staging \
+      --soft-delete --force
+
+When `--context` is omitted, schemas from **all contexts** are included. When specified,
+only subjects matching that exact context are processed. Use `--context ""` to target
+only the default (uncontexted) subjects.
 
 ### Dry-Run & Manifest Workflow
 
@@ -209,7 +227,7 @@ Blocked schemas are skipped during deletion. Warned schemas prompt for confirmat
 | `--strategy` | Naming strategy: `topic-name`, `record-name`, `topic-record-name` | `topic-name` |
 | `--topics` | Comma-separated topics to scan | |
 | `--scan-all-topics` | Scan all topics across clusters | `false` |
-| `--context` | Schema context to scope to | |
+| `--context` | Schema context to scope to (omit for all contexts, `""` for default only) | all |
 | `--dry-run` | Analyze without deleting | `false` |
 | `--output` | Manifest output path (implies `--dry-run`) | |
 | `--from-file` | Read manifest, skip scanning | |
