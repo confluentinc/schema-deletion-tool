@@ -190,10 +190,24 @@ The recommended workflow for production environments:
     # Step 5: Hard-delete (permanent)
     ./schema-deletion-tool --from-file candidates.json --hard-delete
 
-For automation/CI:
+### Non-Interactive / CI Mode
 
-    # Soft-delete without prompts
-    ./schema-deletion-tool --all --soft-delete --force --output deleted.json
+Use `--force` for fully non-interactive execution. When `--force` is set:
+
+- All clusters are scanned (no "select clusters to skip" prompt)
+- Credentials must be provided via `--config-file` or `--cp-config-file` (no interactive prompts)
+- Warned schemas are included in deletion without confirmation
+- Soft-delete and hard-delete execute without confirmation
+
+Examples:
+
+    # Cloud: non-interactive soft-delete (requires config-file for credentials)
+    ./schema-deletion-tool --all --soft-delete --force \
+      --config-file creds.json --output deleted.json
+
+    # CP: non-interactive dry-run
+    ./schema-deletion-tool --platform cp --cp-config-file config.json \
+      --all --dry-run --output candidates.json --scan-all-topics --force
 
     # Hard-delete from manifest without prompts
     ./schema-deletion-tool --from-file deleted.json --hard-delete --force
@@ -233,7 +247,7 @@ Blocked schemas are skipped during deletion. Warned schemas prompt for confirmat
 | `--from-file` | Read manifest, skip scanning | |
 | `--soft-delete` | Soft-delete only | `false` |
 | `--hard-delete` | Hard-delete only | `false` |
-| `--force` | Skip interactive confirmations | `false` |
+| `--force` | Non-interactive mode: skip all prompts, scan all clusters, require credentials via config file | `false` |
 | `--workers` | Number of concurrent topic scanners | `25` |
 
 ## How It Works

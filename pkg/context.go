@@ -30,8 +30,8 @@ func NewContext(configFile string) (*Context, error) {
 	}, nil
 }
 
-func (ctx *Context) SetClusters(clusters []string) error {
-	if err := ctx.promptCredentials(clusters); err != nil {
+func (ctx *Context) SetClusters(clusters []string, force bool) error {
+	if err := ctx.resolveCredentials(clusters, force); err != nil {
 		return err
 	}
 	ctx.Clusters = clusters
@@ -50,10 +50,13 @@ func loadConfig(configFile string) (map[string]Credentials, error) {
 	return credentials, nil
 }
 
-func (ctx *Context) promptCredentials(clusters []string) error {
+func (ctx *Context) resolveCredentials(clusters []string, force bool) error {
 	for _, cluster := range clusters {
 		if _, ok := ctx.Credentials[cluster]; ok {
 			continue
+		}
+		if force {
+			return fmt.Errorf("no credentials for cluster %s; provide them via --config-file when using --force", cluster)
 		}
 		fmt.Printf("Enter your API Key for Kafka cluster %s: ", cluster)
 		apiKey, err := ReadLine()

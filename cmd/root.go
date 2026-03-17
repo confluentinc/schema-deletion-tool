@@ -87,7 +87,7 @@ func run(cmd *cobra.Command, _ []string) error {
 	}
 
 	// List clusters and set up credentials
-	ctx, err := setupContext(platform, platformFlag, configFile)
+	ctx, err := setupContext(platform, platformFlag, configFile, force)
 	if err != nil {
 		return err
 	}
@@ -198,7 +198,7 @@ func createPlatform(platformFlag, cpConfigFile string) (pkg.Platform, error) {
 	}
 }
 
-func setupContext(platform pkg.Platform, platformFlag, configFile string) (*pkg.Context, error) {
+func setupContext(platform pkg.Platform, platformFlag, configFile string, force bool) (*pkg.Context, error) {
 	ctx, err := pkg.NewContext(configFile)
 	if err != nil {
 		return nil, err
@@ -225,30 +225,36 @@ func setupContext(platform pkg.Platform, platformFlag, configFile string) (*pkg.
 		return nil, err
 	}
 
-	// Display clusters
-	clusterInfos := make([]pkg.ClusterInfo, len(clusters))
-	copy(clusterInfos, clusters)
-
-	fmt.Print("Please select the clusters you want to skip, with cluster IDs separated by comma: ")
-	resp, err := pkg.ReadLine()
-	if err != nil {
-		return nil, err
-	}
-	skipped := make(map[string]struct{})
-	if resp != "" {
-		for _, id := range strings.Split(resp, ",") {
-			skipped[strings.TrimSpace(id)] = struct{}{}
-		}
-	}
-
 	var clusterIDs []string
-	for _, c := range clusters {
-		if _, ok := skipped[c.ID]; !ok {
+	if force {
+		// Non-interactive: scan all clusters, no prompting
+		for _, c := range clusters {
 			clusterIDs = append(clusterIDs, c.ID)
 		}
+	} else {
+		// Interactive: display clusters and ask which to skip
+		clusterInfos := make([]pkg.ClusterInfo, len(clusters))
+		copy(clusterInfos, clusters)
+
+		fmt.Print("Please select the clusters you want to skip, with cluster IDs separated by comma: ")
+		resp, err := pkg.ReadLine()
+		if err != nil {
+			return nil, err
+		}
+		skipped := make(map[string]struct{})
+		if resp != "" {
+			for _, id := range strings.Split(resp, ",") {
+				skipped[strings.TrimSpace(id)] = struct{}{}
+			}
+		}
+		for _, c := range clusters {
+			if _, ok := skipped[c.ID]; !ok {
+				clusterIDs = append(clusterIDs, c.ID)
+			}
+		}
 	}
 
-	return ctx, ctx.SetClusters(clusterIDs)
+	return ctx, ctx.SetClusters(clusterIDs, force)
 }
 
 func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.Platform, ctx *pkg.Context, workers int) (map[int32]int, error) {
