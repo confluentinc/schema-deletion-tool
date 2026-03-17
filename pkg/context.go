@@ -3,9 +3,10 @@ package pkg
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
+	"syscall"
 
-	"github.com/havoc-io/gopass"
+	"golang.org/x/term"
 )
 
 type Context struct {
@@ -38,7 +39,7 @@ func (ctx *Context) SetClusters(clusters []string) error {
 }
 
 func loadConfig(configFile string) (map[string]Credentials, error) {
-	content, err := ioutil.ReadFile(configFile)
+	content, err := os.ReadFile(configFile)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +61,8 @@ func (ctx *Context) promptCredentials(clusters []string) error {
 			return err
 		}
 		fmt.Printf("Enter your API secret for Kafka cluster %s: ", cluster)
-		apiSecret, err := gopass.GetPasswdMasked()
+		apiSecret, err := term.ReadPassword(int(syscall.Stdin))
+		fmt.Println()
 		if err != nil {
 			return err
 		}

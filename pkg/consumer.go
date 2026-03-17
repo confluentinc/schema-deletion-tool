@@ -3,9 +3,18 @@ package pkg
 import (
 	"encoding/binary"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+)
+
+// Default header names used by Confluent's HeaderSchemaIdSerializer.
+// The serializer puts schema IDs in headers instead of the magic byte prefix.
+var (
+	DefaultValueSchemaIDHeaders = []string{"value.schema.id", "sr.value.schema.id", "schema.id"}
+	DefaultKeySchemaIDHeaders   = []string{"key.schema.id", "sr.key.schema.id"}
 )
 
 func CreateConsumer(bootstrapServer string, credentials Credentials) (*kafka.Consumer, error) {
@@ -13,6 +22,15 @@ func CreateConsumer(bootstrapServer string, credentials Credentials) (*kafka.Con
 	if err != nil {
 		return nil, err
 	}
+	consumer, err := kafka.NewConsumer(ccfg)
+	if err != nil {
+		return nil, err
+	}
+	return consumer, nil
+}
+
+// CreateConsumerFromConfig creates a consumer from a pre-built ConfigMap.
+func CreateConsumerFromConfig(ccfg *kafka.ConfigMap) (*kafka.Consumer, error) {
 	consumer, err := kafka.NewConsumer(ccfg)
 	if err != nil {
 		return nil, err
@@ -40,10 +58,23 @@ func createConsumerConfig(bootstrapServer string, credentials Credentials) (*kaf
 	if err := ccfg.SetKey("sasl.password", credentials.ApiSecret); err != nil {
 		return nil, err
 	}
-	if err := ccfg.SetKey("group.id", "console-schema-deletion-tool"); err != nil {
+	if err := ccfg.SetKey("group.id", fmt.Sprintf("schema-deletion-tool-%d", time.Now().UnixNano())); err != nil {
+		return nil, err
+	}
+	if err := ccfg.SetKey("enable.auto.commit", false); err != nil {
+		return nil, err
+	}
+	if err := ccfg.SetKey("auto.offset.reset", "earliest"); err != nil {
 		return nil, err
 	}
 	return ccfg, nil
+}
+
+// ScanActiveSchemas scans all messages in a topic and extracts schema IDs
+// from both the magic byte prefix in payloads AND from message headers
+// (for topics using HeaderSchemaIdSerializer).
+func ScanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, error) {
+	return scanActiveSchemas(consumer, topic)
 }
 
 func scanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, error) {
@@ -92,19 +123,78 @@ func scanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, e
 		}
 		offsets[msg.TopicPartition.Partition] = msg.TopicPartition.Offset
 
-		value := msg.Value
-		if len(value) >= MessageOffset && value[0] == MagicByte {
-			schemaID := int32(binary.BigEndian.Uint32(value[1:MessageOffset]))
-			activeSchemas[schemaID] = activeSchemas[schemaID] | VALUEONLY
-		}
-		key := msg.Key
-		if len(key) >= MessageOffset && key[0] == MagicByte {
-			schemaID := int32(binary.BigEndian.Uint32(key[1:MessageOffset]))
-			activeSchemas[schemaID] = activeSchemas[schemaID] | KEYONLY
-		}
+		// Extract schema IDs from payload (magic byte prefix)
+		extractSchemaIDFromPayload(msg.Value, VALUEONLY, activeSchemas)
+		extractSchemaIDFromPayload(msg.Key, KEYONLY, activeSchemas)
+
+		// Extract schema IDs from headers (HeaderSchemaIdSerializer)
+		extractSchemaIDsFromHeaders(msg.Headers, activeSchemas)
 	}
 
 	return activeSchemas, nil
+}
+
+// extractSchemaIDFromPayload extracts schema ID from the Confluent wire format:
+// byte 0 = magic byte (0x00), bytes 1-4 = schema ID (big-endian).
+func extractSchemaIDFromPayload(data []byte, schemaType int, activeSchemas map[int32]int) {
+	if len(data) >= MessageOffset && data[0] == MagicByte {
+		schemaID := int32(binary.BigEndian.Uint32(data[1:MessageOffset]))
+		activeSchemas[schemaID] = activeSchemas[schemaID] | schemaType
+	}
+}
+
+// extractSchemaIDsFromHeaders checks message headers for schema IDs placed by
+// Confluent's HeaderSchemaIdSerializer. The schema ID can be stored as either:
+// - 4-byte big-endian binary (standard Confluent format)
+// - String-encoded integer (some client implementations)
+func extractSchemaIDsFromHeaders(headers []kafka.Header, activeSchemas map[int32]int) {
+	for _, h := range headers {
+		headerKey := strings.ToLower(h.Key)
+		schemaType := classifySchemaIDHeader(headerKey)
+		if schemaType == 0 {
+			continue
+		}
+
+		schemaID := parseSchemaIDFromHeaderValue(h.Value)
+		if schemaID > 0 {
+			activeSchemas[schemaID] = activeSchemas[schemaID] | schemaType
+		}
+	}
+}
+
+// classifySchemaIDHeader returns KEYONLY, VALUEONLY, or 0 based on the header name.
+func classifySchemaIDHeader(headerKey string) int {
+	for _, name := range DefaultKeySchemaIDHeaders {
+		if headerKey == name {
+			return KEYONLY
+		}
+	}
+	for _, name := range DefaultValueSchemaIDHeaders {
+		if headerKey == name {
+			return VALUEONLY
+		}
+	}
+	return 0
+}
+
+// parseSchemaIDFromHeaderValue parses a schema ID from header bytes.
+// Supports both 4-byte big-endian binary and UTF-8 string-encoded integers.
+func parseSchemaIDFromHeaderValue(value []byte) int32 {
+	if len(value) == 0 {
+		return 0
+	}
+
+	// Try 4-byte big-endian (standard Confluent format)
+	if len(value) == 4 {
+		return int32(binary.BigEndian.Uint32(value))
+	}
+
+	// Try string-encoded integer
+	if id, err := strconv.ParseInt(string(value), 10, 32); err == nil {
+		return int32(id)
+	}
+
+	return 0
 }
 
 func checkIfReachesOffsets(endOffsets, offsets map[int32]kafka.Offset, partitions int32) bool {

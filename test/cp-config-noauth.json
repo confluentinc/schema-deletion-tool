@@ -1,0 +1,12 @@
+{
+  "schema_registry": {
+    "url": "http://localhost:8081",
+    "auth": "none"
+  },
+  "clusters": [
+    {
+      "name": "local",
+      "bootstrap_servers": "127.0.0.1:9092"
+    }
+  ]
+}

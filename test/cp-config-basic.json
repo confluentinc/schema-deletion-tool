@@ -1,0 +1,14 @@
+{
+  "schema_registry": {
+    "url": "http://localhost:8082",
+    "auth": "basic",
+    "username": "admin",
+    "password": "admin"
+  },
+  "clusters": [
+    {
+      "name": "local",
+      "bootstrap_servers": "localhost:9092"
+    }
+  ]
+}

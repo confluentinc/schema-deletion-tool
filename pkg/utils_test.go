@@ -1,7 +1,7 @@
 package pkg
 
 import (
-	"io/ioutil"
+	"io"
 	"os"
 	"testing"
 
@@ -76,7 +76,7 @@ func TestPrintTable(t *testing.T) {
 
 	PrintTable(TopicInfoFields, topicsWithClusterInfo, false)
 	_ = w.Close()
-	out, _ := ioutil.ReadAll(r)
+	out, _ := io.ReadAll(r)
 	req.Equal("+---------+-----------+\n"+
 		"| TOPIC   | CLUSTERID |\n"+
 		"+---------+-----------+\n"+
@@ -89,7 +89,7 @@ func TestPrintTable(t *testing.T) {
 
 	PrintTable(TopicInfoFields, topicsWithClusterInfo, true)
 	_ = w.Close()
-	out, _ = ioutil.ReadAll(r)
+	out, _ = io.ReadAll(r)
 	req.Equal("+---+---------+-----------+\n"+
 		"|   | TOPIC   | CLUSTERID |\n"+
 		"+---+---------+-----------+\n"+

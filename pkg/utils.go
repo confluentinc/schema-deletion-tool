@@ -3,7 +3,6 @@ package pkg
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/jedib0t/go-pretty/v6/table"
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -66,33 +64,6 @@ func ExtractTopicFromSubject(subjects []string) []string {
 	return topics
 }
 
-func ValidateParams(cmd *cobra.Command) (string, bool, error) {
-	if !cmd.Flags().Changed("all") && !cmd.Flags().Changed("subject") {
-		return "", false, errors.New("at least one of --subject or --all must be specified")
-	}
-	if cmd.Flags().Changed("all") && cmd.Flags().Changed("subject") {
-		return "", false, errors.New("only one of --subject or --all can be specified")
-	}
-
-	if cmd.Flags().Changed("subject") {
-		subject, err := cmd.Flags().GetString("subject")
-		if err != nil {
-			return "", false, err
-		}
-		if !VerifySubject(subject) {
-			return "", false, errors.New("only subjects from TopicNameStrategy is supported")
-		}
-	}
-	subject, err := cmd.Flags().GetString("subject")
-	if err != nil {
-		return "", false, err
-	}
-	cleanAll, err := cmd.Flags().GetBool("all")
-	if err != nil {
-		return "", false, err
-	}
-	return subject, cleanAll, nil
-}
 
 func PrintTable(fields []interface{}, objects interface{}, includeOrder bool) {
 	if includeOrder {

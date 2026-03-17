@@ -13,6 +13,11 @@ build-plugin:
 test:
 	go test -v ./...
 
+test-integration:
+	go test -v -tags=integration ./...
+
 clean:
-	rm -r $(NAME)
-	rm -r $(PLUGIN_NAME)
+	rm -f $(NAME)
+	rm -f $(PLUGIN_NAME)
+
+.PHONY: build build-local build-plugin test test-integration clean
