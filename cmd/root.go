@@ -28,6 +28,9 @@ func run(cmd *cobra.Command, _ []string) error {
 	hardDelete, _ := cmd.Flags().GetBool("hard-delete")
 	force, _ := cmd.Flags().GetBool("force")
 	workers, _ := cmd.Flags().GetInt("workers")
+	srURL, _ := cmd.Flags().GetString("sr-url")
+	srAPIKey, _ := cmd.Flags().GetString("sr-api-key")
+	srAPISecret, _ := cmd.Flags().GetString("sr-api-secret")
 	if workers < 1 {
 		workers = 1
 	}
@@ -49,13 +52,13 @@ func run(cmd *cobra.Command, _ []string) error {
 
 	// ---- FROM-FILE MODE: skip scanning, go straight to deletion ----
 	if fromFile != "" {
-		return runFromFile(fromFile, platformFlag, cpConfigFile, configFile, softDelete, hardDelete, force)
+		return runFromFile(fromFile, platformFlag, cpConfigFile, configFile, srURL, srAPIKey, srAPISecret, softDelete, hardDelete, force)
 	}
 
 	// ---- DISCOVERY MODE: scan topics and find candidates ----
 
 	// Create platform
-	platform, err := createPlatform(platformFlag, cpConfigFile)
+	platform, err := createPlatform(platformFlag, cpConfigFile, srURL, srAPIKey, srAPISecret)
 	if err != nil {
 		return err
 	}
@@ -171,13 +174,13 @@ func run(cmd *cobra.Command, _ []string) error {
 	return pkg.ExecuteDeletion(candidates, platform, softDelete, hardDelete, force)
 }
 
-func runFromFile(fromFile, platformFlag, cpConfigFile, configFile string, softDelete, hardDelete, force bool) error {
+func runFromFile(fromFile, platformFlag, cpConfigFile, configFile, srURL, srAPIKey, srAPISecret string, softDelete, hardDelete, force bool) error {
 	manifest, err := pkg.ReadManifest(fromFile)
 	if err != nil {
 		return err
 	}
 
-	platform, err := createPlatform(platformFlag, cpConfigFile)
+	platform, err := createPlatform(platformFlag, cpConfigFile, srURL, srAPIKey, srAPISecret)
 	if err != nil {
 		return err
 	}
@@ -186,10 +189,17 @@ func runFromFile(fromFile, platformFlag, cpConfigFile, configFile string, softDe
 	return pkg.ExecuteDeletion(manifest.Candidates, platform, softDelete, hardDelete, force)
 }
 
-func createPlatform(platformFlag, cpConfigFile string) (pkg.Platform, error) {
+func createPlatform(platformFlag, cpConfigFile, srURL, srAPIKey, srAPISecret string) (pkg.Platform, error) {
 	switch platformFlag {
 	case "cloud":
-		return pkg.NewCloudPlatform(), nil
+		cp := pkg.NewCloudPlatform()
+		if srURL != "" && srAPIKey != "" {
+			cp.SetSRCredentials(srURL, srAPIKey, srAPISecret)
+		} else {
+			fmt.Println("Note: --sr-url and --sr-api-key not provided. Schema reference checking will be skipped for Cloud.")
+			fmt.Println("Provide SR credentials to enable reference safety checks.")
+		}
+		return cp, nil
 	case "cp":
 		if cpConfigFile == "" {
 			return nil, errors.New("--cp-config-file is required when --platform=cp")
@@ -441,6 +451,11 @@ Supports both Confluent Cloud and Confluent Platform.`,
 	rootCmd.Flags().Bool("hard-delete", false, "Execute hard-delete only (schemas must already be soft-deleted).")
 	rootCmd.Flags().Bool("force", false, "Skip interactive confirmation prompts.")
 	rootCmd.Flags().Int("workers", 25, "Number of concurrent topic scanners.")
+
+	// SR credentials for Cloud reference checking (referencedby API not in CLI)
+	rootCmd.Flags().String("sr-url", "", "Schema Registry URL (enables reference checking for Cloud).")
+	rootCmd.Flags().String("sr-api-key", "", "Schema Registry API key (for reference checking).")
+	rootCmd.Flags().String("sr-api-secret", "", "Schema Registry API secret (for reference checking).")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

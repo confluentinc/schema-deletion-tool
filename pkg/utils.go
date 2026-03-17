@@ -46,18 +46,7 @@ func VerifySubject(subject string) bool {
 func ExtractTopicFromSubject(subjects []string) []string {
 	var topics []string
 	for _, subject := range subjects {
-		var rawSubject string
-		if !strings.HasPrefix(subject, CONTEXT_PREFIX) {
-			rawSubject = subject
-		} else {
-			rawSubject = subject[len(CONTEXT_PREFIX):]
-			idx := strings.Index(rawSubject, CONTEXT_SUFFIX)
-			if idx == -1 {
-				rawSubject = subject
-			} else {
-				rawSubject = rawSubject[idx+1:]
-			}
-		}
+		rawSubject := GetRawSubject(subject)
 		topic := strings.TrimSuffix(strings.TrimSuffix(rawSubject, "-value"), "-key")
 		topics = append(topics, topic)
 	}

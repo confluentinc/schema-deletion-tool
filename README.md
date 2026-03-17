@@ -248,7 +248,10 @@ Blocked schemas are skipped during deletion. Warned schemas prompt for confirmat
 | `--soft-delete` | Soft-delete only | `false` |
 | `--hard-delete` | Hard-delete only | `false` |
 | `--force` | Non-interactive mode: skip all prompts, scan all clusters, require credentials via config file | `false` |
-| `--workers` | Number of concurrent topic scanners | `25` |
+| `--workers` | Number of concurrent topic scanners (1-100) | `25` |
+| `--sr-url` | Schema Registry URL (enables reference checking for Cloud) | |
+| `--sr-api-key` | Schema Registry API key (for reference checking) | |
+| `--sr-api-secret` | Schema Registry API secret (for reference checking) | |
 
 ## How It Works
 

@@ -6,18 +6,33 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 )
 
 // CloudPlatform implements Platform for Confluent Cloud using the `confluent` CLI.
-type CloudPlatform struct{}
+// For operations not exposed by the CLI (referencedby), it uses the SR REST API
+// directly if SR credentials are provided.
+type CloudPlatform struct {
+	srURL       string
+	srAPIKey    string
+	srAPISecret string
+	httpClient  *http.Client
+}
 
 func NewCloudPlatform() *CloudPlatform {
-	return &CloudPlatform{}
+	return &CloudPlatform{
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// SetSRCredentials configures direct SR REST API access for operations
+// not available via the confluent CLI (e.g., referencedby).
+func (c *CloudPlatform) SetSRCredentials(srURL, apiKey, apiSecret string) {
+	c.srURL = srURL
+	c.srAPIKey = apiKey
+	c.srAPISecret = apiSecret
 }
 
 func (c *CloudPlatform) ListSubjects(strategy string) ([]string, error) {
@@ -68,23 +83,23 @@ func (c *CloudPlatform) DeleteSchema(subject string, version string, permanent b
 }
 
 func (c *CloudPlatform) GetReferencedBy(subject string, version string) ([]int, error) {
-	// The confluent CLI doesn't expose referencedby. Call the SR REST API directly.
-	srEndpoint, apiKey, apiSecret, err := c.getSRCredentials()
-	if err != nil {
-		return nil, fmt.Errorf("cannot check references: %w", err)
+	// The confluent CLI doesn't expose referencedby. Use SR REST API if credentials are configured.
+	if c.srURL == "" || c.srAPIKey == "" {
+		// No SR credentials — cannot check references. Return nil (skip check).
+		return nil, nil
 	}
 
-	encodedSubject := strings.ReplaceAll(url.QueryEscape(subject), "+", "%20")
-	reqURL := fmt.Sprintf("%s/subjects/%s/versions/%s/referencedby", srEndpoint, encodedSubject, version)
+	encodedSubject := encodeSubject(subject)
+	reqURL := fmt.Sprintf("%s/subjects/%s/versions/%s/referencedby", c.srURL, encodedSubject, version)
 
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.SetBasicAuth(apiKey, apiSecret)
+	req.SetBasicAuth(c.srAPIKey, c.srAPISecret)
 	req.Header.Set("Accept", "application/vnd.schemaregistry.v1+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("referencedby request failed: %w", err)
 	}
@@ -95,7 +110,6 @@ func (c *CloudPlatform) GetReferencedBy(subject string, version string) ([]int, 
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
-		// 404 means no references, which is fine
 		if resp.StatusCode == 404 {
 			return nil, nil
 		}
@@ -107,40 +121,6 @@ func (c *CloudPlatform) GetReferencedBy(subject string, version string) ([]int, 
 		return nil, fmt.Errorf("failed to parse referencedby response: %w", err)
 	}
 	return refs, nil
-}
-
-// getSRCredentials retrieves the SR endpoint and API credentials from the confluent CLI.
-func (c *CloudPlatform) getSRCredentials() (endpoint, apiKey, apiSecret string, err error) {
-	output, err := ExecuteCommand(Confluent, []string{
-		"schema-registry", "cluster", "describe", "-o", "json",
-	}, true)
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to describe SR cluster: %w", err)
-	}
-	var cluster struct {
-		EndpointURL string `json:"endpoint_url"`
-	}
-	if err = json.Unmarshal(output, &cluster); err != nil {
-		return "", "", "", err
-	}
-
-	// Get API key from the stored credentials
-	credsOutput, err := ExecuteCommand(Confluent, []string{
-		"schema-registry", "cluster", "describe", "-o", "json",
-	}, true)
-	if err != nil {
-		return "", "", "", err
-	}
-	var creds struct {
-		EndpointURL string `json:"endpoint_url"`
-		APIKey      string `json:"api_key"`
-		APISecret   string `json:"api_secret"`
-	}
-	if err = json.Unmarshal(credsOutput, &creds); err != nil {
-		return "", "", "", err
-	}
-
-	return cluster.EndpointURL, creds.APIKey, creds.APISecret, nil
 }
 
 func (c *CloudPlatform) GetSchemaDetail(subject string, version string) (*SchemaDetail, error) {

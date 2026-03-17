@@ -247,7 +247,10 @@ func checkMigrationChain(candidates []DeletionCandidate, indices []int, subject 
 		hasLower := false
 		hasHigher := false
 		for _, av := range activeVersions {
-			avNum, _ := strconv.Atoi(av)
+			avNum, err := strconv.Atoi(av)
+			if err != nil {
+				continue
+			}
 			if avNum < vNum {
 				hasLower = true
 			}
