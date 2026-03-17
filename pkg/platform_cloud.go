@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -65,32 +68,79 @@ func (c *CloudPlatform) DeleteSchema(subject string, version string, permanent b
 }
 
 func (c *CloudPlatform) GetReferencedBy(subject string, version string) ([]int, error) {
-	// The confluent CLI doesn't expose referencedby. Use the REST API via the CLI's sr-endpoint.
+	// The confluent CLI doesn't expose referencedby. Call the SR REST API directly.
+	srEndpoint, apiKey, apiSecret, err := c.getSRCredentials()
+	if err != nil {
+		return nil, fmt.Errorf("cannot check references: %w", err)
+	}
+
+	encodedSubject := strings.ReplaceAll(url.QueryEscape(subject), "+", "%20")
+	reqURL := fmt.Sprintf("%s/subjects/%s/versions/%s/referencedby", srEndpoint, encodedSubject, version)
+
+	req, err := http.NewRequest("GET", reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(apiKey, apiSecret)
+	req.Header.Set("Accept", "application/vnd.schemaregistry.v1+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("referencedby request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		// 404 means no references, which is fine
+		if resp.StatusCode == 404 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("referencedby returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var refs []int
+	if err = json.Unmarshal(body, &refs); err != nil {
+		return nil, fmt.Errorf("failed to parse referencedby response: %w", err)
+	}
+	return refs, nil
+}
+
+// getSRCredentials retrieves the SR endpoint and API credentials from the confluent CLI.
+func (c *CloudPlatform) getSRCredentials() (endpoint, apiKey, apiSecret string, err error) {
 	output, err := ExecuteCommand(Confluent, []string{
-		"schema-registry", "schema", "describe",
-		"--subject", subject, "--version", version, "-o", "json",
+		"schema-registry", "cluster", "describe", "-o", "json",
 	}, true)
 	if err != nil {
-		// If we can't get referencedby info, return empty (fail open for Cloud)
-		return nil, nil
+		return "", "", "", fmt.Errorf("failed to describe SR cluster: %w", err)
+	}
+	var cluster struct {
+		EndpointURL string `json:"endpoint_url"`
+	}
+	if err = json.Unmarshal(output, &cluster); err != nil {
+		return "", "", "", err
 	}
 
-	// Try to extract schema ID and use the API endpoint
-	var detail struct {
-		SchemaID int `json:"schema_id"`
-	}
-	if err = json.Unmarshal(output, &detail); err != nil {
-		return nil, nil
-	}
-
-	// Use confluent CLI api call if available
-	refsOutput, err := ExecuteCommand(Confluent, []string{
-		"schema-registry", "exporter", "get-status",
+	// Get API key from the stored credentials
+	credsOutput, err := ExecuteCommand(Confluent, []string{
+		"schema-registry", "cluster", "describe", "-o", "json",
 	}, true)
-	_ = refsOutput
-	// For Cloud, referencedby requires direct REST API access.
-	// We'll use the same approach as CPPlatform when SR URL is available.
-	return nil, nil
+	if err != nil {
+		return "", "", "", err
+	}
+	var creds struct {
+		EndpointURL string `json:"endpoint_url"`
+		APIKey      string `json:"api_key"`
+		APISecret   string `json:"api_secret"`
+	}
+	if err = json.Unmarshal(credsOutput, &creds); err != nil {
+		return "", "", "", err
+	}
+
+	return cluster.EndpointURL, creds.APIKey, creds.APISecret, nil
 }
 
 func (c *CloudPlatform) GetSchemaDetail(subject string, version string) (*SchemaDetail, error) {

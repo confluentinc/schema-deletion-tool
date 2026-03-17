@@ -15,6 +15,7 @@ func WriteManifest(path string, candidates []DeletionCandidate, opts ManifestOpt
 	}
 
 	manifest := Manifest{
+		ManifestVersion: "1",
 		GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
 		Platform:        opts.Platform,
 		Strategy:        opts.Strategy,
@@ -31,7 +32,7 @@ func WriteManifest(path string, candidates []DeletionCandidate, opts ManifestOpt
 		return fmt.Errorf("failed to marshal manifest: %w", err)
 	}
 
-	if err = os.WriteFile(path, data, 0644); err != nil {
+	if err = os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write manifest to %s: %w", path, err)
 	}
 
@@ -201,13 +202,15 @@ func ExecuteDeletion(candidates []DeletionCandidate, platform Platform, softDele
 		}
 
 		fmt.Println("Executing hard deletion...")
+		hardDeleted := 0
 		for _, c := range deletable {
 			if err := platform.DeleteSchema(c.Subject, c.Version, true); err != nil {
 				fmt.Printf("%sWarning: failed to hard-delete %s:%s: %v%s\n", RED, c.Subject, c.Version, err, RESET)
 				continue
 			}
+			hardDeleted++
 		}
-		fmt.Printf("Hard-deleted %d schema(s).\n", len(deletable))
+		fmt.Printf("Hard-deleted %d of %d schema(s).\n", hardDeleted, len(deletable))
 	}
 
 	return nil

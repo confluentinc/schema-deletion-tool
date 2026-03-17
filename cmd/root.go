@@ -28,6 +28,12 @@ func run(cmd *cobra.Command, _ []string) error {
 	hardDelete, _ := cmd.Flags().GetBool("hard-delete")
 	force, _ := cmd.Flags().GetBool("force")
 	workers, _ := cmd.Flags().GetInt("workers")
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 100 {
+		workers = 100
+	}
 
 	// --output implies --dry-run
 	if outputFile != "" {
@@ -307,6 +313,7 @@ func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.
 				results <- scanResult{err: err, topic: t.Topic}
 				return
 			}
+			defer consumer.Close()
 
 			topicSchemas, err := pkg.ScanActiveSchemas(consumer, t.Topic)
 			results <- scanResult{schemas: topicSchemas, err: err, topic: t.Topic}

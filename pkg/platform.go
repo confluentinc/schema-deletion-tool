@@ -133,6 +133,7 @@ func (c *DeletionCandidate) IsWarning() bool {
 
 // Manifest is the output of a dry-run, used as input for --from-file.
 type Manifest struct {
+	ManifestVersion string              `json:"manifest_version"`
 	GeneratedAt     string              `json:"generated_at"`
 	Platform        string              `json:"platform"`
 	Strategy        string              `json:"strategy"`

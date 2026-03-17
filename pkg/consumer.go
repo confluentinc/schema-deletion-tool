@@ -102,7 +102,7 @@ func scanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, e
 	endOffsets := make(map[int32]kafka.Offset)
 	offsets := make(map[int32]kafka.Offset)
 	for i := int32(0); i < DesiredNumPartitions; i++ {
-		low, high, err := consumer.QueryWatermarkOffsets(topic, i, -1)
+		low, high, err := consumer.QueryWatermarkOffsets(topic, i, 10000)
 		if err != nil {
 			return nil, err
 		}
@@ -116,11 +116,30 @@ func scanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, e
 		return activeSchemas, nil
 	}
 
+	deadline := time.Now().Add(5 * time.Minute) // per-topic scan deadline
+	consecutiveTimeouts := 0
+	maxConsecutiveTimeouts := 3
+
 	for !checkIfReachesOffsets(endOffsets, offsets, DesiredNumPartitions) {
-		msg, err := consumer.ReadMessage(5 * time.Second)
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("topic %s: scan deadline exceeded (5 minutes)", topic)
+		}
+
+		msg, err := consumer.ReadMessage(10 * time.Second)
 		if err != nil {
+			// ReadMessage timeout is not fatal — it means no message available within the timeout
+			kafkaErr, ok := err.(kafka.Error)
+			if ok && kafkaErr.Code() == kafka.ErrTimedOut {
+				consecutiveTimeouts++
+				if consecutiveTimeouts >= maxConsecutiveTimeouts {
+					// After 3 consecutive timeouts (30s), assume we've read everything available
+					break
+				}
+				continue
+			}
 			return nil, err
 		}
+		consecutiveTimeouts = 0
 		offsets[msg.TopicPartition.Partition] = msg.TopicPartition.Offset
 
 		// Extract schema IDs from payload (magic byte prefix)

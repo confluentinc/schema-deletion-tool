@@ -12,7 +12,10 @@ func AnalyzeCandidates(schemas []SchemaInfo, activeSchemas map[int32]int, platfo
 	// Step 1: Identify unused schemas (same logic as before)
 	var unused []SchemaInfo
 	for _, schema := range schemas {
-		schemaID, _ := strconv.ParseInt(schema.SchemaID.String(), 10, 32)
+		schemaID, err := strconv.ParseInt(schema.SchemaID.String(), 10, 32)
+		if err != nil {
+			continue // skip schemas with unparseable IDs
+		}
 		if IsKeySchema(schema.Subject) {
 			if activeSchemas[int32(schemaID)]&KEYONLY == 0 {
 				unused = append(unused, schema)
@@ -43,7 +46,10 @@ func AnalyzeCandidates(schemas []SchemaInfo, activeSchemas map[int32]int, platfo
 	// Build a set of candidate schema IDs for cross-referencing
 	candidateIDs := make(map[int]bool)
 	for _, c := range candidates {
-		id, _ := strconv.Atoi(c.SchemaID)
+		id, err := strconv.Atoi(c.SchemaID)
+		if err != nil {
+			continue
+		}
 		candidateIDs[id] = true
 	}
 
@@ -296,7 +302,9 @@ func checkRuleReferences(candidates []DeletionCandidate, allSchemas []SchemaInfo
 // extractSchemaRefsFromRules finds subject:version references in rule params.
 func extractSchemaRefsFromRules(ruleSet *RuleSet) []string {
 	var refs []string
-	allRules := append(ruleSet.DomainRules, ruleSet.MigrationRules...)
+	allRules := make([]Rule, 0, len(ruleSet.DomainRules)+len(ruleSet.MigrationRules))
+	allRules = append(allRules, ruleSet.DomainRules...)
+	allRules = append(allRules, ruleSet.MigrationRules...)
 	for _, rule := range allRules {
 		for _, v := range rule.Params {
 			// Look for subject:version patterns
