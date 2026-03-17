@@ -28,6 +28,21 @@ func TestVerifySubjectForStrategy_TopicRecordName(t *testing.T) {
 	req.True(VerifySubjectForStrategy("my-topic-com.example.Foo", "topic-record-name"))
 	req.False(VerifySubjectForStrategy("orders-value", "topic-record-name"))
 	req.False(VerifySubjectForStrategy("orders", "topic-record-name"))
+	// False positive from old check: topic with dot should not match
+	req.False(VerifySubjectForStrategy("my.topic-value", "topic-record-name"))
+	// No hyphen at all
+	req.False(VerifySubjectForStrategy("com.example.Order", "topic-record-name"))
+	// With context prefix
+	req.True(VerifySubjectForStrategy(":.staging:orders-com.example.Order", "topic-record-name"))
+	req.False(VerifySubjectForStrategy(":.staging:orders-value", "topic-record-name"))
+}
+
+func TestVerifySubjectForStrategy_WithContext(t *testing.T) {
+	req := require.New(t)
+	// Context-prefixed subjects should work with all strategies
+	req.True(VerifySubjectForStrategy(":.ctx:orders-value", "topic-name"))
+	req.True(VerifySubjectForStrategy(":.ctx:com.example.Order", "record-name"))
+	req.False(VerifySubjectForStrategy(":.ctx:orders", "topic-name"))
 }
 
 func TestResolveTopics_TopicName(t *testing.T) {

@@ -272,16 +272,3 @@ func (c *CloudPlatform) CreateConsumerConfig(clusterID string, creds Credentials
 	return ccfg, nil
 }
 
-// VerifySubjectForStrategy checks if a subject matches the given naming strategy.
-func VerifySubjectForStrategy(subject string, strategy string) bool {
-	switch strategy {
-	case "topic-name":
-		return IsValueSchema(subject) || IsKeySchema(subject)
-	case "record-name":
-		return len(subject) > 0
-	case "topic-record-name":
-		return strings.Contains(subject, ".")
-	default:
-		return IsValueSchema(subject) || IsKeySchema(subject)
-	}
-}

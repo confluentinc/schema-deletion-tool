@@ -9,12 +9,12 @@ import (
 // AnalyzeCandidates runs all safety checks on deletion candidates and returns
 // annotated DeletionCandidates with status and block reasons.
 func AnalyzeCandidates(schemas []SchemaInfo, activeSchemas map[int32]int, platform Platform, strategy string) ([]DeletionCandidate, error) {
-	// Step 1: Identify unused schemas (same logic as before)
+	// Step 1: Identify unused schemas
 	var unused []SchemaInfo
 	for _, schema := range schemas {
 		schemaID, err := strconv.ParseInt(schema.SchemaID.String(), 10, 32)
 		if err != nil {
-			continue // skip schemas with unparseable IDs
+			continue
 		}
 		if IsKeySchema(schema.Subject) {
 			if activeSchemas[int32(schemaID)]&KEYONLY == 0 {
@@ -25,7 +25,6 @@ func AnalyzeCandidates(schemas []SchemaInfo, activeSchemas map[int32]int, platfo
 				unused = append(unused, schema)
 			}
 		} else {
-			// RecordNameStrategy or TopicRecordNameStrategy: check both key and value
 			if activeSchemas[int32(schemaID)] == 0 {
 				unused = append(unused, schema)
 			}
@@ -59,7 +58,7 @@ func AnalyzeCandidates(schemas []SchemaInfo, activeSchemas map[int32]int, platfo
 	// Step 3: Check rules (migration chain, encryption, domain)
 	candidates = checkRules(candidates, schemas, platform)
 
-	// Step 4: Check global rule inheritance
+	// Step 4: Check global rule inheritance and global encryption
 	candidates = checkGlobalRules(candidates, platform)
 
 	// Step 5: Check rule references from active schemas
@@ -75,7 +74,6 @@ func checkReferences(candidates []DeletionCandidate, candidateIDs map[int]bool, 
 			continue
 		}
 
-		// Check if ALL referencing schemas are also candidates
 		allRefsCandidates := true
 		var activeRefs []int
 		for _, refID := range refs {
@@ -96,13 +94,11 @@ func checkReferences(candidates []DeletionCandidate, candidateIDs map[int]bool, 
 }
 
 func checkRules(candidates []DeletionCandidate, allSchemas []SchemaInfo, platform Platform) []DeletionCandidate {
-	// Group candidates by subject for migration chain analysis
-	subjectCandidates := make(map[string][]int) // subject -> indices in candidates
+	subjectCandidates := make(map[string][]int)
 	for i, c := range candidates {
 		subjectCandidates[c.Subject] = append(subjectCandidates[c.Subject], i)
 	}
 
-	// Build set of candidate versions per subject
 	candidateVersions := make(map[string]map[string]bool)
 	for _, c := range candidates {
 		if candidateVersions[c.Subject] == nil {
@@ -111,14 +107,12 @@ func checkRules(candidates []DeletionCandidate, allSchemas []SchemaInfo, platfor
 		candidateVersions[c.Subject][c.Version] = true
 	}
 
-	// Get all versions per subject (including active ones) for migration chain analysis
 	allVersionsBySubject := make(map[string][]string)
 	for _, s := range allSchemas {
 		allVersionsBySubject[s.Subject] = append(allVersionsBySubject[s.Subject], s.Version.String())
 	}
 
 	for subject, indices := range subjectCandidates {
-		// Get schema details for each candidate in this subject
 		for _, idx := range indices {
 			if candidates[idx].IsBlocked() {
 				continue
@@ -135,15 +129,13 @@ func checkRules(candidates []DeletionCandidate, allSchemas []SchemaInfo, platfor
 				continue
 			}
 
-			// Check encryption rules (hard block)
-			for _, rule := range detail.RuleSet.DomainRules {
-				if strings.EqualFold(rule.Type, "ENCRYPT") || strings.EqualFold(rule.Type, "DECRYPT") {
-					candidates[idx].Status = StatusBlockedByEncryption
+			// Check encryption rules in BOTH domain and migration rules (hard block)
+			if hasEncryptionRules(detail.RuleSet) {
+				candidates[idx].Status = StatusBlockedByEncryption
+				for _, rule := range getAllEncryptionRules(detail.RuleSet) {
 					candidates[idx].BlockReasons = append(candidates[idx].BlockReasons,
 						fmt.Sprintf("Has %s rule '%s' - deleting will make encrypted messages unreadable", rule.Type, rule.Name))
 				}
-			}
-			if candidates[idx].Status == StatusBlockedByEncryption {
 				continue
 			}
 
@@ -175,22 +167,56 @@ func checkRules(candidates []DeletionCandidate, allSchemas []SchemaInfo, platfor
 	return candidates
 }
 
+// hasEncryptionRules checks both domain and migration rules for ENCRYPT/DECRYPT.
+func hasEncryptionRules(rs *RuleSet) bool {
+	for _, r := range rs.DomainRules {
+		if strings.EqualFold(r.Type, "ENCRYPT") || strings.EqualFold(r.Type, "DECRYPT") {
+			return true
+		}
+	}
+	for _, r := range rs.MigrationRules {
+		if strings.EqualFold(r.Type, "ENCRYPT") || strings.EqualFold(r.Type, "DECRYPT") {
+			return true
+		}
+	}
+	return false
+}
+
+// getAllEncryptionRules returns all ENCRYPT/DECRYPT rules from both domain and migration.
+func getAllEncryptionRules(rs *RuleSet) []Rule {
+	var result []Rule
+	for _, r := range rs.DomainRules {
+		if strings.EqualFold(r.Type, "ENCRYPT") || strings.EqualFold(r.Type, "DECRYPT") {
+			result = append(result, r)
+		}
+	}
+	for _, r := range rs.MigrationRules {
+		if strings.EqualFold(r.Type, "ENCRYPT") || strings.EqualFold(r.Type, "DECRYPT") {
+			result = append(result, r)
+		}
+	}
+	return result
+}
+
 // checkMigrationChain verifies that deleting candidates won't break migration paths
-// between active versions.
+// between active versions. Blocks candidates that sit between active versions
+// if ANY version in the subject has migration rules (the candidate may be a
+// migration target even if it doesn't carry rules itself).
 func checkMigrationChain(candidates []DeletionCandidate, indices []int, subject string, allVersions []string, candidateVersions map[string]bool, platform Platform) {
-	// Find which versions have migration rules
-	versionHasMigration := make(map[string]bool)
+	// Check if any version in this subject has migration rules
+	anyMigrationRules := false
 	for _, v := range allVersions {
 		detail, err := platform.GetSchemaDetail(subject, v)
 		if err != nil || detail == nil || detail.RuleSet == nil {
 			continue
 		}
 		if len(detail.RuleSet.MigrationRules) > 0 {
-			versionHasMigration[v] = true
+			anyMigrationRules = true
+			break
 		}
 	}
 
-	if len(versionHasMigration) == 0 {
+	if !anyMigrationRules {
 		return
 	}
 
@@ -202,22 +228,22 @@ func checkMigrationChain(candidates []DeletionCandidate, indices []int, subject 
 		}
 	}
 
-	if len(activeVersions) < 2 {
+	if len(activeVersions) == 0 {
 		return
 	}
 
-	// For each candidate version that has migration rules and sits between two active versions,
-	// it's on a migration path and must be blocked.
+	// Block any candidate that sits between active versions when migration rules exist.
+	// Even versions without rules themselves can be migration targets.
 	for _, idx := range indices {
 		if candidates[idx].IsBlocked() {
 			continue
 		}
 		v := candidates[idx].Version
-		if !versionHasMigration[v] {
+		vNum, err := strconv.Atoi(v)
+		if err != nil {
 			continue
 		}
 
-		vNum, _ := strconv.Atoi(v)
 		hasLower := false
 		hasHigher := false
 		for _, av := range activeVersions {
@@ -244,14 +270,23 @@ func checkGlobalRules(candidates []DeletionCandidate, platform Platform) []Delet
 		return candidates
 	}
 
-	hasGlobalRules := globalConfig.DefaultRuleSet != nil &&
-		(len(globalConfig.DefaultRuleSet.DomainRules) > 0 || len(globalConfig.DefaultRuleSet.MigrationRules) > 0)
+	if globalConfig.DefaultRuleSet == nil {
+		return candidates
+	}
 
+	hasGlobalRules := len(globalConfig.DefaultRuleSet.DomainRules) > 0 || len(globalConfig.DefaultRuleSet.MigrationRules) > 0
 	if !hasGlobalRules {
 		return candidates
 	}
 
+	// Check if global rules include encryption
+	globalHasEncryption := hasEncryptionRules(globalConfig.DefaultRuleSet)
+
 	for i := range candidates {
+		if candidates[i].IsBlocked() {
+			continue
+		}
+
 		subjectConfig, err := platform.GetSubjectConfig(candidates[i].Subject)
 		if err != nil {
 			continue
@@ -260,6 +295,13 @@ func checkGlobalRules(candidates []DeletionCandidate, platform Platform) []Delet
 		// Subject inherits global rules if it has no override
 		if subjectConfig.OverrideRuleSet == nil && subjectConfig.DefaultRuleSet == nil {
 			candidates[i].InheritsGlobalRules = true
+
+			// If global rules have encryption and subject inherits them, block
+			if globalHasEncryption {
+				candidates[i].Status = StatusBlockedByEncryption
+				candidates[i].BlockReasons = append(candidates[i].BlockReasons,
+					"Inherits global ENCRYPT/DECRYPT rules - deleting may make encrypted messages unreadable")
+			}
 		}
 	}
 
@@ -267,13 +309,17 @@ func checkGlobalRules(candidates []DeletionCandidate, platform Platform) []Delet
 }
 
 func checkRuleReferences(candidates []DeletionCandidate, allSchemas []SchemaInfo, unused []SchemaInfo, platform Platform) []DeletionCandidate {
-	// Build set of unused schema keys
 	unusedSet := make(map[string]bool)
 	for _, u := range unused {
 		unusedSet[u.Subject+":"+u.Version.String()] = true
 	}
 
-	// Check if any active schema's rules reference a candidate
+	// Build candidate key map for O(1) lookup instead of O(C) inner loop
+	candidateByKey := make(map[string]int) // "subject:version" -> index
+	for i, c := range candidates {
+		candidateByKey[c.Subject+":"+c.Version] = i
+	}
+
 	for _, schema := range allSchemas {
 		if unusedSet[schema.Subject+":"+schema.Version.String()] {
 			continue
@@ -285,11 +331,10 @@ func checkRuleReferences(candidates []DeletionCandidate, allSchemas []SchemaInfo
 
 		refsFromRules := extractSchemaRefsFromRules(detail.RuleSet)
 		for _, ref := range refsFromRules {
-			for i := range candidates {
-				candidateKey := candidates[i].Subject + ":" + candidates[i].Version
-				if ref == candidateKey && !candidates[i].IsBlocked() {
-					candidates[i].Status = StatusBlockedByRuleReference
-					candidates[i].BlockReasons = append(candidates[i].BlockReasons,
+			if idx, ok := candidateByKey[ref]; ok {
+				if !candidates[idx].IsBlocked() {
+					candidates[idx].Status = StatusBlockedByRuleReference
+					candidates[idx].BlockReasons = append(candidates[idx].BlockReasons,
 						fmt.Sprintf("Referenced by rule on active schema %s:%s", schema.Subject, schema.Version.String()))
 				}
 			}
@@ -307,7 +352,6 @@ func extractSchemaRefsFromRules(ruleSet *RuleSet) []string {
 	allRules = append(allRules, ruleSet.MigrationRules...)
 	for _, rule := range allRules {
 		for _, v := range rule.Params {
-			// Look for subject:version patterns
 			if strings.Contains(v, ":") {
 				parts := strings.SplitN(v, ":", 2)
 				if len(parts) == 2 {
@@ -327,6 +371,9 @@ func CheckCompatibility(candidates []DeletionCandidate, platform Platform) []Del
 	globalConfig, _ := platform.GetGlobalConfig()
 
 	for i := range candidates {
+		if candidates[i].IsBlocked() {
+			continue
+		}
 		subject := candidates[i].Subject
 		if checked[subject] {
 			continue
@@ -345,7 +392,7 @@ func CheckCompatibility(candidates []DeletionCandidate, platform Platform) []Del
 
 		if isTransitive(level) {
 			for j := range candidates {
-				if candidates[j].Subject == subject {
+				if candidates[j].Subject == subject && !candidates[j].IsBlocked() {
 					candidates[j].BlockReasons = append(candidates[j].BlockReasons,
 						fmt.Sprintf("Subject has %s compatibility - deleting intermediate versions may break future registrations", level))
 				}

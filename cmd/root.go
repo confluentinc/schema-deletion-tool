@@ -359,11 +359,20 @@ func printCandidateSummary(candidates []pkg.DeletionCandidate) {
 
 func validateFlags(cmd *cobra.Command, platformFlag, strategy, fromFile string, dryRun, softDelete, hardDelete, force bool, cpConfigFile, topicsFlag string, scanAllTopics bool) error {
 	if fromFile != "" {
+		if cmd.Flags().Changed("output") {
+			return errors.New("--output and --from-file are mutually exclusive")
+		}
 		if dryRun {
 			return errors.New("--dry-run and --from-file are mutually exclusive")
 		}
 		if !softDelete && !hardDelete {
 			return errors.New("--from-file requires --soft-delete and/or --hard-delete")
+		}
+		// Reject flags that have no effect with --from-file
+		for _, flag := range []string{"subject", "all", "topics", "scan-all-topics", "strategy", "context"} {
+			if cmd.Flags().Changed(flag) {
+				return fmt.Errorf("--%s has no effect with --from-file and cannot be combined", flag)
+			}
 		}
 		return nil
 	}

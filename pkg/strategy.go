@@ -6,6 +6,30 @@ import (
 	"strings"
 )
 
+// VerifySubjectForStrategy checks if a subject matches the given naming strategy.
+func VerifySubjectForStrategy(subject string, strategy string) bool {
+	// Strip context prefix before checking strategy
+	raw := GetRawSubject(subject)
+
+	switch strategy {
+	case "topic-name":
+		return IsValueSchema(raw) || IsKeySchema(raw)
+	case "record-name":
+		return len(raw) > 0
+	case "topic-record-name":
+		// Must have a hyphen followed by a segment containing a dot (qualified record name).
+		// e.g., "orders-com.example.Order" — hyphen at index 6, dot after it.
+		hyphenIdx := strings.Index(raw, "-")
+		if hyphenIdx <= 0 {
+			return false
+		}
+		afterHyphen := raw[hyphenIdx+1:]
+		return strings.Contains(afterHyphen, ".")
+	default:
+		return IsValueSchema(raw) || IsKeySchema(raw)
+	}
+}
+
 // ResolveTopics determines which topics to scan based on the naming strategy.
 func ResolveTopics(subjects []string, strategy string, explicitTopics []string, scanAllTopics bool, platform Platform, clusters []string) ([]TopicWithClusterInfo, error) {
 	if len(explicitTopics) > 0 {
@@ -109,15 +133,7 @@ func resolveTopicRecordName(subjects []string, platform Platform, clusters []str
 	// Match subjects to topics
 	matchedTopics := make(map[string]bool)
 	for _, subject := range subjects {
-		// Strip context prefix if present
-		rawSubject := subject
-		if strings.HasPrefix(rawSubject, CONTEXT_PREFIX) {
-			rawSubject = rawSubject[len(CONTEXT_PREFIX):]
-			idx := strings.Index(rawSubject, CONTEXT_SUFFIX)
-			if idx != -1 {
-				rawSubject = rawSubject[idx+1:]
-			}
-		}
+		rawSubject := GetRawSubject(subject)
 
 		for _, topic := range sortedTopics {
 			if strings.HasPrefix(rawSubject, topic+"-") {

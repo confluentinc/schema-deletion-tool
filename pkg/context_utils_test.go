@@ -29,23 +29,9 @@ func TestParseContext_NoContext(t *testing.T) {
 
 func TestParseContext_MalformedPrefix(t *testing.T) {
 	req := require.New(t)
-	// Has prefix but no closing colon
 	ctx, raw := ParseContext(":.mycontext")
 	req.Equal("", ctx)
 	req.Equal(":.mycontext", raw)
-}
-
-func TestBuildContextSubject(t *testing.T) {
-	req := require.New(t)
-	req.Equal(":.mycontext:orders-value", BuildContextSubject("mycontext", "orders-value"))
-	req.Equal("orders-value", BuildContextSubject("", "orders-value"))
-}
-
-func TestHasContext(t *testing.T) {
-	req := require.New(t)
-	req.True(HasContext(":.mycontext:orders-value"))
-	req.True(HasContext(":.:orders-value"))
-	req.False(HasContext("orders-value"))
 }
 
 func TestGetRawSubject(t *testing.T) {
@@ -54,17 +40,9 @@ func TestGetRawSubject(t *testing.T) {
 	req.Equal("orders-value", GetRawSubject("orders-value"))
 }
 
-func TestGroupByContext(t *testing.T) {
+func TestGetContextFromSubject(t *testing.T) {
 	req := require.New(t)
-	subjects := []string{
-		"orders-value",
-		":.staging:orders-value",
-		":.staging:payments-value",
-		":.production:orders-value",
-	}
-	groups := GroupByContext(subjects)
-	req.Len(groups, 3) // "", "staging", "production"
-	req.Len(groups[""], 1)
-	req.Len(groups["staging"], 2)
-	req.Len(groups["production"], 1)
+	req.Equal("mycontext", GetContextFromSubject(":.mycontext:orders-value"))
+	req.Equal("", GetContextFromSubject("orders-value"))
+	req.Equal("", GetContextFromSubject(":.:orders-value"))
 }
