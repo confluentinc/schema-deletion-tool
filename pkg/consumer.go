@@ -17,18 +17,6 @@ var (
 	DefaultKeySchemaIDHeaders   = []string{"key.schema.id", "sr.key.schema.id"}
 )
 
-func CreateConsumer(bootstrapServer string, credentials Credentials) (*kafka.Consumer, error) {
-	ccfg, err := createConsumerConfig(bootstrapServer, credentials)
-	if err != nil {
-		return nil, err
-	}
-	consumer, err := kafka.NewConsumer(ccfg)
-	if err != nil {
-		return nil, err
-	}
-	return consumer, nil
-}
-
 // CreateConsumerFromConfig creates a consumer from a pre-built ConfigMap.
 func CreateConsumerFromConfig(ccfg *kafka.ConfigMap) (*kafka.Consumer, error) {
 	consumer, err := kafka.NewConsumer(ccfg)
@@ -36,38 +24,6 @@ func CreateConsumerFromConfig(ccfg *kafka.ConfigMap) (*kafka.Consumer, error) {
 		return nil, err
 	}
 	return consumer, nil
-}
-
-func createConsumerConfig(bootstrapServer string, credentials Credentials) (*kafka.ConfigMap, error) {
-	ccfg := &kafka.ConfigMap{}
-	if err := ccfg.SetKey("bootstrap.servers", bootstrapServer); err != nil {
-		return nil, err
-	}
-	if err := ccfg.SetKey("sasl.mechanism", "PLAIN"); err != nil {
-		return nil, err
-	}
-	if err := ccfg.SetKey("security.protocol", "SASL_SSL"); err != nil {
-		return nil, err
-	}
-	if err := ccfg.SetKey("ssl.endpoint.identification.algorithm", "https"); err != nil {
-		return nil, err
-	}
-	if err := ccfg.SetKey("sasl.username", credentials.ApiKey); err != nil {
-		return nil, err
-	}
-	if err := ccfg.SetKey("sasl.password", credentials.ApiSecret); err != nil {
-		return nil, err
-	}
-	if err := ccfg.SetKey("group.id", fmt.Sprintf("schema-deletion-tool-%d", time.Now().UnixNano())); err != nil {
-		return nil, err
-	}
-	if err := ccfg.SetKey("enable.auto.commit", false); err != nil {
-		return nil, err
-	}
-	if err := ccfg.SetKey("auto.offset.reset", "earliest"); err != nil {
-		return nil, err
-	}
-	return ccfg, nil
 }
 
 // ScanActiveSchemas scans all messages in a topic and extracts schema IDs

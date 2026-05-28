@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,17 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 )
+
+// srHTTPError is returned by doRequest for HTTP error responses,
+// allowing callers to distinguish 404 (expected) from real errors.
+type srHTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *srHTTPError) Error() string {
+	return fmt.Sprintf("SR returned HTTP %d: %s", e.StatusCode, e.Body)
+}
 
 // encodeSubject URL-encodes a subject name for use in REST API paths.
 // Handles context-qualified subjects like ":.mycontext:orders-value".
@@ -107,7 +119,7 @@ func (cp *CPPlatform) doRequest(method, path string) ([]byte, error) {
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("SR returned HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, &srHTTPError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 	return body, nil
 }
@@ -178,12 +190,16 @@ func (cp *CPPlatform) DeleteSchema(subject string, version string, permanent boo
 func (cp *CPPlatform) GetReferencedBy(subject string, version string) ([]int, error) {
 	body, err := cp.doRequest("GET", fmt.Sprintf("/subjects/%s/versions/%s/referencedby", encodeSubject(subject), version))
 	if err != nil {
-		// If endpoint not available, fail open
-		return nil, nil
+		var httpErr *srHTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
+			// Endpoint not available (older SR versions), fail open
+			return nil, nil
+		}
+		return nil, fmt.Errorf("referencedby check failed for %s:%s: %w", subject, version, err)
 	}
 	var refs []int
 	if err = json.Unmarshal(body, &refs); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("failed to parse referencedby response for %s:%s: %w", subject, version, err)
 	}
 	return refs, nil
 }
@@ -203,11 +219,16 @@ func (cp *CPPlatform) GetSchemaDetail(subject string, version string) (*SchemaDe
 func (cp *CPPlatform) GetSubjectConfig(subject string) (*SubjectConfig, error) {
 	body, err := cp.doRequest("GET", fmt.Sprintf("/config/%s", encodeSubject(subject)))
 	if err != nil {
-		return &SubjectConfig{}, nil
+		var httpErr *srHTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
+			// No subject-level config set, will inherit global
+			return &SubjectConfig{}, nil
+		}
+		return nil, fmt.Errorf("failed to get config for subject %s: %w", subject, err)
 	}
 	var config SubjectConfig
 	if err = json.Unmarshal(body, &config); err != nil {
-		return &SubjectConfig{}, nil
+		return nil, fmt.Errorf("failed to parse config for subject %s: %w", subject, err)
 	}
 	return &config, nil
 }
@@ -215,11 +236,15 @@ func (cp *CPPlatform) GetSubjectConfig(subject string) (*SubjectConfig, error) {
 func (cp *CPPlatform) GetGlobalConfig() (*GlobalConfig, error) {
 	body, err := cp.doRequest("GET", "/config")
 	if err != nil {
-		return &GlobalConfig{}, nil
+		var httpErr *srHTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
+			return &GlobalConfig{}, nil
+		}
+		return nil, fmt.Errorf("failed to get global config: %w", err)
 	}
 	var config GlobalConfig
 	if err = json.Unmarshal(body, &config); err != nil {
-		return &GlobalConfig{}, nil
+		return nil, fmt.Errorf("failed to parse global config: %w", err)
 	}
 	return &config, nil
 }

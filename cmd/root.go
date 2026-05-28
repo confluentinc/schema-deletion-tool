@@ -10,27 +10,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func run(cmd *cobra.Command, _ []string) error {
-	// Parse flags
+func runScan(cmd *cobra.Command, _ []string) error {
 	platformFlag, _ := cmd.Flags().GetString("platform")
 	strategy, _ := cmd.Flags().GetString("strategy")
 	subject, _ := cmd.Flags().GetString("subject")
-	all, _ := cmd.Flags().GetBool("all")
+	all, _ := cmd.Flags().GetBool("all-subjects")
 	configFile, _ := cmd.Flags().GetString("config-file")
-	cpConfigFile, _ := cmd.Flags().GetString("cp-config-file")
 	topicsFlag, _ := cmd.Flags().GetString("topics")
-	scanAllTopics, _ := cmd.Flags().GetBool("scan-all-topics")
+	scanAllTopics, _ := cmd.Flags().GetBool("all-topics")
 	contextFlag, _ := cmd.Flags().GetString("context")
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	outputFile, _ := cmd.Flags().GetString("output")
-	fromFile, _ := cmd.Flags().GetString("from-file")
-	softDelete, _ := cmd.Flags().GetBool("soft-delete")
-	hardDelete, _ := cmd.Flags().GetBool("hard-delete")
 	force, _ := cmd.Flags().GetBool("force")
 	workers, _ := cmd.Flags().GetInt("workers")
 	srURL, _ := cmd.Flags().GetString("sr-url")
 	srAPIKey, _ := cmd.Flags().GetString("sr-api-key")
 	srAPISecret, _ := cmd.Flags().GetString("sr-api-secret")
+
 	if workers < 1 {
 		workers = 1
 	}
@@ -38,27 +33,24 @@ func run(cmd *cobra.Command, _ []string) error {
 		workers = 100
 	}
 
-	// --output implies --dry-run
-	if outputFile != "" {
-		dryRun = true
+	// Validate scan-specific flags
+	if !cmd.Flags().Changed("all-subjects") && !cmd.Flags().Changed("subject") {
+		return errors.New("at least one of --subject or --all-subjects must be specified")
 	}
-
-	// Validate flag combinations
-	if err := validateFlags(cmd, platformFlag, strategy, fromFile, dryRun, softDelete, hardDelete, force, cpConfigFile, topicsFlag, scanAllTopics); err != nil {
-		return err
+	if cmd.Flags().Changed("subject") && strategy == "topic-name" && !pkg.VerifySubject(subject) {
+		return errors.New("subject does not match TopicNameStrategy (must end with -key or -value)")
+	}
+	if strategy == "record-name" && topicsFlag == "" && !scanAllTopics {
+		return errors.New("--topics or --all-topics is required with --strategy=record-name")
+	}
+	if platformFlag == "cp" && configFile == "" {
+		return errors.New("--config-file is required when --platform=cp")
 	}
 
 	cmd.SilenceUsage = true
 
-	// ---- FROM-FILE MODE: skip scanning, go straight to deletion ----
-	if fromFile != "" {
-		return runFromFile(fromFile, platformFlag, cpConfigFile, configFile, srURL, srAPIKey, srAPISecret, softDelete, hardDelete, force)
-	}
-
-	// ---- DISCOVERY MODE: scan topics and find candidates ----
-
 	// Create platform
-	platform, err := createPlatform(platformFlag, cpConfigFile, srURL, srAPIKey, srAPISecret)
+	platform, err := createPlatform(platformFlag, configFile, srURL, srAPIKey, srAPISecret)
 	if err != nil {
 		return err
 	}
@@ -70,7 +62,6 @@ func run(cmd *cobra.Command, _ []string) error {
 		if err != nil {
 			return err
 		}
-		// Filter by context if --context flag was explicitly set
 		if cmd.Flags().Changed("context") {
 			var filtered []string
 			for _, s := range subjects {
@@ -95,7 +86,7 @@ func run(cmd *cobra.Command, _ []string) error {
 		explicitTopics = strings.Split(topicsFlag, ",")
 	}
 
-	// List clusters and set up credentials
+	// Set up context (cluster credentials)
 	ctx, err := setupContext(platform, platformFlag, configFile, force)
 	if err != nil {
 		return err
@@ -143,44 +134,59 @@ func run(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	// Print summary
 	printCandidateSummary(candidates)
 
-	// Dry run: output manifest and exit
-	if dryRun {
-		if outputFile != "" {
-			scannedTopics := make([]string, len(topicsWithCluster))
-			for i, t := range topicsWithCluster {
-				scannedTopics[i] = t.Topic
-			}
-			return pkg.WriteManifest(outputFile, candidates, pkg.ManifestOptions{
-				Platform:        platformFlag,
-				Strategy:        strategy,
-				ScannedTopics:   scannedTopics,
-				ScannedClusters: ctx.Clusters,
-				ActiveSchemaIDs: activeSchemas,
-			})
+	// Write manifest if output specified
+	if outputFile != "" {
+		scannedTopics := make([]string, len(topicsWithCluster))
+		for i, t := range topicsWithCluster {
+			scannedTopics[i] = t.Topic
 		}
-		fmt.Println("\nDry run complete. Use --output <file> to save manifest for later deletion.")
-		return nil
+		return pkg.WriteManifest(outputFile, candidates, pkg.ManifestOptions{
+			Platform:        platformFlag,
+			Strategy:        strategy,
+			ScannedTopics:   scannedTopics,
+			ScannedClusters: ctx.Clusters,
+			ActiveSchemaIDs: activeSchemas,
+		})
 	}
 
-	// Interactive deletion (original behavior, enhanced)
-	if !softDelete && !hardDelete {
-		softDelete = true
-		hardDelete = true
-	}
-
-	return pkg.ExecuteDeletion(candidates, platform, softDelete, hardDelete, force)
+	fmt.Println("\nScan complete. Use --output <file> to save manifest for deletion.")
+	return nil
 }
 
-func runFromFile(fromFile, platformFlag, cpConfigFile, configFile, srURL, srAPIKey, srAPISecret string, softDelete, hardDelete, force bool) error {
+func runDelete(cmd *cobra.Command, _ []string) error {
+	platformFlag, _ := cmd.Flags().GetString("platform")
+	configFile, _ := cmd.Flags().GetString("config-file")
+	fromFile, _ := cmd.Flags().GetString("from-file")
+	mode, _ := cmd.Flags().GetString("mode")
+	force, _ := cmd.Flags().GetBool("force")
+
+	if platformFlag == "cp" && configFile == "" {
+		return errors.New("--config-file is required when --platform=cp")
+	}
+
+	var softDelete, hardDelete bool
+	switch mode {
+	case "soft":
+		softDelete = true
+	case "hard":
+		hardDelete = true
+	case "full":
+		softDelete = true
+		hardDelete = true
+	default:
+		return fmt.Errorf("unknown mode: %s (use 'soft', 'hard', or 'full')", mode)
+	}
+
+	cmd.SilenceUsage = true
+
 	manifest, err := pkg.ReadManifest(fromFile)
 	if err != nil {
 		return err
 	}
 
-	platform, err := createPlatform(platformFlag, cpConfigFile, srURL, srAPIKey, srAPISecret)
+	platform, err := createPlatform(platformFlag, configFile, "", "", "")
 	if err != nil {
 		return err
 	}
@@ -189,7 +195,7 @@ func runFromFile(fromFile, platformFlag, cpConfigFile, configFile, srURL, srAPIK
 	return pkg.ExecuteDeletion(manifest.Candidates, platform, softDelete, hardDelete, force)
 }
 
-func createPlatform(platformFlag, cpConfigFile, srURL, srAPIKey, srAPISecret string) (pkg.Platform, error) {
+func createPlatform(platformFlag, configFile, srURL, srAPIKey, srAPISecret string) (pkg.Platform, error) {
 	switch platformFlag {
 	case "cloud":
 		cp := pkg.NewCloudPlatform()
@@ -201,10 +207,10 @@ func createPlatform(platformFlag, cpConfigFile, srURL, srAPIKey, srAPISecret str
 		}
 		return cp, nil
 	case "cp":
-		if cpConfigFile == "" {
-			return nil, errors.New("--cp-config-file is required when --platform=cp")
+		if configFile == "" {
+			return nil, errors.New("--config-file is required when --platform=cp")
 		}
-		config, err := pkg.LoadCPConfig(cpConfigFile)
+		config, err := pkg.LoadCPConfig(configFile)
 		if err != nil {
 			return nil, err
 		}
@@ -215,7 +221,13 @@ func createPlatform(platformFlag, cpConfigFile, srURL, srAPIKey, srAPISecret str
 }
 
 func setupContext(platform pkg.Platform, platformFlag, configFile string, force bool) (*pkg.Context, error) {
-	ctx, err := pkg.NewContext(configFile)
+	// For CP, cluster credentials are in the platform config, not a separate file
+	contextConfigFile := configFile
+	if platformFlag == "cp" {
+		contextConfigFile = ""
+	}
+
+	ctx, err := pkg.NewContext(contextConfigFile)
 	if err != nil {
 		return nil, err
 	}
@@ -367,95 +379,67 @@ func printCandidateSummary(candidates []pkg.DeletionCandidate) {
 	}
 }
 
-func validateFlags(cmd *cobra.Command, platformFlag, strategy, fromFile string, dryRun, softDelete, hardDelete, force bool, cpConfigFile, topicsFlag string, scanAllTopics bool) error {
-	if fromFile != "" {
-		if cmd.Flags().Changed("output") {
-			return errors.New("--output and --from-file are mutually exclusive")
-		}
-		if dryRun {
-			return errors.New("--dry-run and --from-file are mutually exclusive")
-		}
-		if !softDelete && !hardDelete {
-			return errors.New("--from-file requires --soft-delete and/or --hard-delete")
-		}
-		// Reject flags that have no effect with --from-file
-		for _, flag := range []string{"subject", "all", "topics", "scan-all-topics", "strategy", "context"} {
-			if cmd.Flags().Changed(flag) {
-				return fmt.Errorf("--%s has no effect with --from-file and cannot be combined", flag)
-			}
-		}
-		return nil
-	}
-
-	// Standard mode validation
-	if !cmd.Flags().Changed("all") && !cmd.Flags().Changed("subject") {
-		return errors.New("at least one of --subject or --all must be specified")
-	}
-	if cmd.Flags().Changed("all") && cmd.Flags().Changed("subject") {
-		return errors.New("only one of --subject or --all can be specified")
-	}
-
-	if cmd.Flags().Changed("subject") {
-		subject, _ := cmd.Flags().GetString("subject")
-		if strategy == "topic-name" && !pkg.VerifySubject(subject) {
-			return errors.New("subject does not match TopicNameStrategy (must end with -key or -value)")
-		}
-	}
-
-	if strategy == "record-name" && topicsFlag == "" && !scanAllTopics {
-		return errors.New("--topics or --scan-all-topics is required with --strategy=record-name")
-	}
-
-	if platformFlag == "cp" && cpConfigFile == "" {
-		return errors.New("--cp-config-file is required when --platform=cp")
-	}
-
-	if force && !softDelete && !hardDelete && !dryRun {
-		// Force without explicit delete mode is fine — will default to soft+hard in interactive mode
-	}
-
-	return nil
-}
-
 func Execute() {
 	var rootCmd = &cobra.Command{
 		Use:   "confluent schema-registry cleanup",
-		Short: "Schema deletion tool - a simple CLI to delete unused schemas",
-		Long: `Schema deletion tool - a simple CLI to discover unused schemas from
-Kafka topics and delete them from Schema Registry.
+		Short: "Schema deletion tool - discover and delete unused schemas",
+		Long: `Schema deletion tool - discover unused schemas from Kafka topics
+and delete them from Schema Registry.
 
-Supports both Confluent Cloud and Confluent Platform.`,
-		RunE: run,
+Supports both Confluent Cloud and Confluent Platform.
+
+Workflow:
+  1. scan   - Discover unused schemas and save a manifest
+  2. delete - Delete schemas from a manifest`,
 	}
 
-	// Original flags
-	rootCmd.Flags().StringP("subject", "V", "", "Subject to clean up schemas from.")
-	rootCmd.Flags().Bool("all", false, "Clean up all eligible subjects.")
-	rootCmd.Flags().String("config-file", "", "Path to config file containing credentials for Kafka clusters.")
+	// Common flags (persistent = inherited by subcommands)
+	rootCmd.PersistentFlags().String("platform", "cloud", "Platform type: 'cloud' or 'cp' (Confluent Platform).")
+	rootCmd.PersistentFlags().String("config-file", "", "Path to config file (cluster credentials for Cloud, full config for CP).")
+	rootCmd.PersistentFlags().Bool("force", false, "Skip interactive confirmation prompts.")
 
-	// Platform flags
-	rootCmd.Flags().String("platform", "cloud", "Platform type: 'cloud' or 'cp' (Confluent Platform).")
-	rootCmd.Flags().String("cp-config-file", "", "Path to CP config JSON file (required for --platform=cp).")
+	// Scan subcommand
+	scanCmd := &cobra.Command{
+		Use:   "scan",
+		Short: "Scan topics and analyze schemas for deletion candidates",
+		Long: `Scan Kafka topics to find active schema IDs, then analyze all registered
+schemas to identify unused versions that are candidates for deletion.
 
-	// Strategy flags
-	rootCmd.Flags().String("strategy", "topic-name", "Subject naming strategy: 'topic-name', 'record-name', 'topic-record-name'.")
-	rootCmd.Flags().String("topics", "", "Comma-separated list of topics to scan (required for record-name strategy).")
-	rootCmd.Flags().Bool("scan-all-topics", false, "Scan all topics across all clusters.")
-	rootCmd.Flags().String("context", "", "Schema context to scope operations to (e.g., 'staging', 'production').")
+This is a read-only operation. Use --output to save results as a manifest
+file that can be passed to the delete command.`,
+		RunE: runScan,
+	}
+	scanCmd.Flags().StringP("subject", "V", "", "Subject to analyze.")
+	scanCmd.Flags().Bool("all-subjects", false, "Analyze all eligible subjects.")
+	scanCmd.Flags().String("strategy", "topic-name", "Subject naming strategy: 'topic-name', 'record-name', 'topic-record-name'.")
+	scanCmd.Flags().String("topics", "", "Comma-separated list of topics to scan.")
+	scanCmd.Flags().Bool("all-topics", false, "Scan all topics across all clusters.")
+	scanCmd.Flags().String("context", "", "Schema context to scope operations to (e.g., 'staging').")
+	scanCmd.Flags().Int("workers", 25, "Number of concurrent topic scanners.")
+	scanCmd.Flags().String("output", "", "Path to write manifest file.")
+	scanCmd.Flags().String("sr-url", "", "Schema Registry URL (enables reference checking for Cloud).")
+	scanCmd.Flags().String("sr-api-key", "", "Schema Registry API key (for reference checking).")
+	scanCmd.Flags().String("sr-api-secret", "", "Schema Registry API secret (for reference checking).")
+	scanCmd.MarkFlagsMutuallyExclusive("subject", "all-subjects")
+	scanCmd.MarkFlagsMutuallyExclusive("topics", "all-topics")
 
-	// Workflow flags
-	rootCmd.Flags().Bool("dry-run", false, "Analyze candidates without deleting. Use with --output to save manifest.")
-	rootCmd.Flags().String("output", "", "Path to write manifest file (implies --dry-run).")
-	rootCmd.Flags().String("from-file", "", "Path to manifest file. Skips scanning, executes deletion directly.")
-	rootCmd.Flags().Bool("soft-delete", false, "Execute soft-delete only.")
-	rootCmd.Flags().Bool("hard-delete", false, "Execute hard-delete only (schemas must already be soft-deleted).")
-	rootCmd.Flags().Bool("force", false, "Skip interactive confirmation prompts.")
-	rootCmd.Flags().Int("workers", 25, "Number of concurrent topic scanners.")
+	// Delete subcommand
+	deleteCmd := &cobra.Command{
+		Use:   "delete",
+		Short: "Delete schemas from a scan manifest",
+		Long: `Delete schema versions listed in a manifest file produced by the scan command.
 
-	// SR credentials for Cloud reference checking (referencedby API not in CLI)
-	rootCmd.Flags().String("sr-url", "", "Schema Registry URL (enables reference checking for Cloud).")
-	rootCmd.Flags().String("sr-api-key", "", "Schema Registry API key (for reference checking).")
-	rootCmd.Flags().String("sr-api-secret", "", "Schema Registry API secret (for reference checking).")
+Deletion modes:
+  soft - Soft-delete only (default, reversible)
+  hard - Hard-delete only (for already soft-deleted schemas)
+  full - Soft-delete followed by hard-delete (permanent)`,
+		RunE: runDelete,
+	}
+	deleteCmd.Flags().String("from-file", "", "Path to manifest file from scan (required).")
+	deleteCmd.Flags().String("mode", "soft", "Deletion mode: 'soft', 'hard', or 'full'.")
+	deleteCmd.MarkFlagRequired("from-file")
+
+	rootCmd.AddCommand(scanCmd, deleteCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

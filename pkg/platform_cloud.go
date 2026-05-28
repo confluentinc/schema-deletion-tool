@@ -144,6 +144,8 @@ func (c *CloudPlatform) GetSubjectConfig(subject string) (*SubjectConfig, error)
 		"--subject", subject, "-o", "json",
 	}, true)
 	if err != nil {
+		// CLI exits non-zero both for "no config set" (common) and real errors.
+		// We can't distinguish them without parsing stderr, so we fail open.
 		return &SubjectConfig{}, nil
 	}
 	var config SubjectConfig
@@ -158,6 +160,8 @@ func (c *CloudPlatform) GetGlobalConfig() (*GlobalConfig, error) {
 		"schema-registry", "compatibility", "describe", "-o", "json",
 	}, true)
 	if err != nil {
+		// CLI exits non-zero both for "no config set" and real errors.
+		// We can't distinguish them without parsing stderr, so we fail open.
 		return &GlobalConfig{}, nil
 	}
 	var config GlobalConfig

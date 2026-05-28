@@ -21,6 +21,7 @@ func TestVerifySubject(t *testing.T) {
 
 func TestExtractTopicFromSubject(t *testing.T) {
 	req := require.New(t)
+	// All these subjects map to the same topic "test" — dedup should collapse them
 	subjects := []string{
 		"test",
 		"test-key",
@@ -30,16 +31,11 @@ func TestExtractTopicFromSubject(t *testing.T) {
 		":.mycontext:test-key",
 		":.mycontext:test-value",
 	}
-	topics := []string{
-		"test",
-		"test",
-		"test",
-		"test",
-		"test",
-		"test",
-		"test",
-	}
-	req.Equal(topics, ExtractTopicFromSubject(subjects))
+	req.Equal([]string{"test"}, ExtractTopicFromSubject(subjects))
+
+	// Different topics should all be preserved
+	subjects = []string{"orders-value", "payments-key", "users-value"}
+	req.Equal([]string{"orders", "payments", "users"}, ExtractTopicFromSubject(subjects))
 }
 
 func TestIsValidChoice(t *testing.T) {

@@ -449,3 +449,170 @@ func TestAnalyze_RecordNameStrategy(t *testing.T) {
 	req.Len(candidates, 1)
 	req.Equal("com.example.Payment", candidates[0].Subject)
 }
+
+func TestCheckRules_EncryptPayloadBlock(t *testing.T) {
+	req := require.New(t)
+	mock := NewMockPlatform()
+	mock.SchemaDetails["users-value:1"] = &SchemaDetail{
+		RuleSet: &RuleSet{
+			DomainRules: []Rule{
+				{Name: "encryptPayload", Type: "ENCRYPT_PAYLOAD", Kind: "TRANSFORM"},
+			},
+		},
+	}
+
+	schemas := []SchemaInfo{
+		{Subject: "users-value", Version: json.Number("1"), SchemaID: json.Number("100")},
+	}
+	activeSchemas := map[int32]int{}
+
+	candidates, err := AnalyzeCandidates(schemas, activeSchemas, mock, "topic-name")
+	req.NoError(err)
+	req.Len(candidates, 1)
+	req.Equal(StatusBlockedByEncryption, candidates[0].Status)
+	req.Contains(candidates[0].BlockReasons[0], "ENCRYPT_PAYLOAD")
+}
+
+func TestCheckRules_EncodingRulesEncryptionBlock(t *testing.T) {
+	req := require.New(t)
+	mock := NewMockPlatform()
+	mock.SchemaDetails["users-value:1"] = &SchemaDetail{
+		RuleSet: &RuleSet{
+			EncodingRules: []Rule{
+				{Name: "encryptSSN", Type: "ENCRYPT", Kind: "TRANSFORM"},
+			},
+		},
+	}
+
+	schemas := []SchemaInfo{
+		{Subject: "users-value", Version: json.Number("1"), SchemaID: json.Number("100")},
+	}
+	activeSchemas := map[int32]int{}
+
+	candidates, err := AnalyzeCandidates(schemas, activeSchemas, mock, "topic-name")
+	req.NoError(err)
+	req.Len(candidates, 1)
+	req.Equal(StatusBlockedByEncryption, candidates[0].Status)
+}
+
+func TestCheckRules_DisabledEncryptionRuleSkipped(t *testing.T) {
+	req := require.New(t)
+	mock := NewMockPlatform()
+	mock.SchemaDetails["users-value:1"] = &SchemaDetail{
+		RuleSet: &RuleSet{
+			DomainRules: []Rule{
+				{Name: "encryptSSN", Type: "ENCRYPT", Kind: "TRANSFORM", Disabled: true},
+			},
+		},
+	}
+
+	schemas := []SchemaInfo{
+		{Subject: "users-value", Version: json.Number("1"), SchemaID: json.Number("100")},
+	}
+	activeSchemas := map[int32]int{}
+
+	candidates, err := AnalyzeCandidates(schemas, activeSchemas, mock, "topic-name")
+	req.NoError(err)
+	req.Len(candidates, 1)
+	// Disabled encryption rule should not block
+	req.Equal(StatusSafe, candidates[0].Status)
+}
+
+func TestCheckRules_DisabledDomainRuleSkipped(t *testing.T) {
+	req := require.New(t)
+	mock := NewMockPlatform()
+	mock.SchemaDetails["orders-value:1"] = &SchemaDetail{
+		RuleSet: &RuleSet{
+			DomainRules: []Rule{
+				{Name: "validateAge", Type: "CEL", Kind: "CONDITION", Disabled: true},
+			},
+		},
+	}
+
+	schemas := []SchemaInfo{
+		{Subject: "orders-value", Version: json.Number("1"), SchemaID: json.Number("100")},
+	}
+	activeSchemas := map[int32]int{}
+
+	candidates, err := AnalyzeCandidates(schemas, activeSchemas, mock, "topic-name")
+	req.NoError(err)
+	req.Len(candidates, 1)
+	// Disabled domain rule should not produce a warning
+	req.Equal(StatusSafe, candidates[0].Status)
+}
+
+func TestCheckRules_DisabledMigrationRuleSkipped(t *testing.T) {
+	req := require.New(t)
+	mock := NewMockPlatform()
+
+	// v1 active, v2 candidate with DISABLED migration rules, v3 active
+	mock.SchemaDetails["orders-value:1"] = &SchemaDetail{}
+	mock.SchemaDetails["orders-value:2"] = &SchemaDetail{
+		RuleSet: &RuleSet{
+			MigrationRules: []Rule{
+				{Name: "upgrade", Type: "JSONATA", Kind: "TRANSFORM", Mode: "UPGRADE", Disabled: true},
+			},
+		},
+	}
+	mock.SchemaDetails["orders-value:3"] = &SchemaDetail{}
+
+	schemas := []SchemaInfo{
+		{Subject: "orders-value", Version: json.Number("1"), SchemaID: json.Number("100")},
+		{Subject: "orders-value", Version: json.Number("2"), SchemaID: json.Number("101")},
+		{Subject: "orders-value", Version: json.Number("3"), SchemaID: json.Number("102")},
+	}
+	activeSchemas := map[int32]int{100: VALUEONLY, 102: VALUEONLY}
+
+	candidates, err := AnalyzeCandidates(schemas, activeSchemas, mock, "topic-name")
+	req.NoError(err)
+	req.Len(candidates, 1)
+	req.Equal("2", candidates[0].Version)
+	// Disabled migration rules should not trigger chain block or warning
+	req.Equal(StatusSafe, candidates[0].Status)
+}
+
+func TestCheckGlobalRules_EncodingRulesInherited(t *testing.T) {
+	req := require.New(t)
+	mock := NewMockPlatform()
+	mock.GlobalCfg = &GlobalConfig{
+		DefaultRuleSet: &RuleSet{
+			EncodingRules: []Rule{
+				{Name: "globalEncrypt", Type: "ENCRYPT", Kind: "TRANSFORM"},
+			},
+		},
+	}
+
+	schemas := []SchemaInfo{
+		{Subject: "orders-value", Version: json.Number("1"), SchemaID: json.Number("100")},
+	}
+	activeSchemas := map[int32]int{}
+
+	candidates, err := AnalyzeCandidates(schemas, activeSchemas, mock, "topic-name")
+	req.NoError(err)
+	req.Len(candidates, 1)
+	req.True(candidates[0].InheritsGlobalRules)
+	req.Equal(StatusBlockedByEncryption, candidates[0].Status)
+}
+
+func TestCheckGlobalRules_DisabledEncodingRulesSkipped(t *testing.T) {
+	req := require.New(t)
+	mock := NewMockPlatform()
+	mock.GlobalCfg = &GlobalConfig{
+		DefaultRuleSet: &RuleSet{
+			EncodingRules: []Rule{
+				{Name: "globalEncrypt", Type: "ENCRYPT", Kind: "TRANSFORM", Disabled: true},
+			},
+		},
+	}
+
+	schemas := []SchemaInfo{
+		{Subject: "orders-value", Version: json.Number("1"), SchemaID: json.Number("100")},
+	}
+	activeSchemas := map[int32]int{}
+
+	candidates, err := AnalyzeCandidates(schemas, activeSchemas, mock, "topic-name")
+	req.NoError(err)
+	req.Len(candidates, 1)
+	// Disabled global encryption rule should not block
+	req.Equal(StatusSafe, candidates[0].Status)
+}

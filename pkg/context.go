@@ -12,8 +12,6 @@ import (
 type Context struct {
 	Credentials map[string]Credentials
 	Clusters    []string
-	Subjects    []string
-	Topics      []string
 }
 
 func NewContext(configFile string) (*Context, error) {

@@ -139,10 +139,11 @@ func checkRules(candidates []DeletionCandidate, allSchemas []SchemaInfo, platfor
 				continue
 			}
 
-			// Check domain rules (warning)
-			if len(detail.RuleSet.DomainRules) > 0 {
-				ruleNames := make([]string, len(detail.RuleSet.DomainRules))
-				for j, r := range detail.RuleSet.DomainRules {
+			// Check domain rules (warning) — skip disabled rules
+			activeDomain := activeRules(detail.RuleSet.DomainRules)
+			if len(activeDomain) > 0 {
+				ruleNames := make([]string, len(activeDomain))
+				for j, r := range activeDomain {
 					ruleNames[j] = r.Name
 				}
 				if candidates[idx].Status == StatusSafe {
@@ -152,8 +153,8 @@ func checkRules(candidates []DeletionCandidate, allSchemas []SchemaInfo, platfor
 					fmt.Sprintf("Has domain rules: %s", strings.Join(ruleNames, ", ")))
 			}
 
-			// Check migration rules (warning, unless chain would break)
-			if len(detail.RuleSet.MigrationRules) > 0 {
+			// Check migration rules (warning, unless chain would break) — skip disabled
+			if len(activeRules(detail.RuleSet.MigrationRules)) > 0 {
 				if candidates[idx].Status == StatusSafe {
 					candidates[idx].Status = StatusWarnHasMigrationRules
 				}
@@ -167,31 +168,60 @@ func checkRules(candidates []DeletionCandidate, allSchemas []SchemaInfo, platfor
 	return candidates
 }
 
-// hasEncryptionRules checks both domain and migration rules for ENCRYPT/DECRYPT.
+// isEncryptionRuleType checks if a rule type relates to encryption.
+// Uses keyword matching to catch ENCRYPT, DECRYPT, ENCRYPT_PAYLOAD, etc.
+func isEncryptionRuleType(ruleType string) bool {
+	upper := strings.ToUpper(ruleType)
+	return strings.Contains(upper, "ENCRYPT") || strings.Contains(upper, "DECRYPT")
+}
+
+// activeRules filters out disabled rules.
+func activeRules(rules []Rule) []Rule {
+	var result []Rule
+	for _, r := range rules {
+		if !r.Disabled {
+			result = append(result, r)
+		}
+	}
+	return result
+}
+
+// hasEncryptionRules checks domain, migration, and encoding rules for encryption types.
+// Skips disabled rules.
 func hasEncryptionRules(rs *RuleSet) bool {
-	for _, r := range rs.DomainRules {
-		if strings.EqualFold(r.Type, "ENCRYPT") || strings.EqualFold(r.Type, "DECRYPT") {
+	for _, r := range activeRules(rs.DomainRules) {
+		if isEncryptionRuleType(r.Type) {
 			return true
 		}
 	}
-	for _, r := range rs.MigrationRules {
-		if strings.EqualFold(r.Type, "ENCRYPT") || strings.EqualFold(r.Type, "DECRYPT") {
+	for _, r := range activeRules(rs.MigrationRules) {
+		if isEncryptionRuleType(r.Type) {
+			return true
+		}
+	}
+	for _, r := range activeRules(rs.EncodingRules) {
+		if isEncryptionRuleType(r.Type) {
 			return true
 		}
 	}
 	return false
 }
 
-// getAllEncryptionRules returns all ENCRYPT/DECRYPT rules from both domain and migration.
+// getAllEncryptionRules returns all active encryption rules from all rule arrays.
 func getAllEncryptionRules(rs *RuleSet) []Rule {
 	var result []Rule
-	for _, r := range rs.DomainRules {
-		if strings.EqualFold(r.Type, "ENCRYPT") || strings.EqualFold(r.Type, "DECRYPT") {
+	for _, r := range activeRules(rs.DomainRules) {
+		if isEncryptionRuleType(r.Type) {
 			result = append(result, r)
 		}
 	}
-	for _, r := range rs.MigrationRules {
-		if strings.EqualFold(r.Type, "ENCRYPT") || strings.EqualFold(r.Type, "DECRYPT") {
+	for _, r := range activeRules(rs.MigrationRules) {
+		if isEncryptionRuleType(r.Type) {
+			result = append(result, r)
+		}
+	}
+	for _, r := range activeRules(rs.EncodingRules) {
+		if isEncryptionRuleType(r.Type) {
 			result = append(result, r)
 		}
 	}
@@ -210,7 +240,7 @@ func checkMigrationChain(candidates []DeletionCandidate, indices []int, subject 
 		if err != nil || detail == nil || detail.RuleSet == nil {
 			continue
 		}
-		if len(detail.RuleSet.MigrationRules) > 0 {
+		if len(activeRules(detail.RuleSet.MigrationRules)) > 0 {
 			anyMigrationRules = true
 			break
 		}
@@ -277,7 +307,9 @@ func checkGlobalRules(candidates []DeletionCandidate, platform Platform) []Delet
 		return candidates
 	}
 
-	hasGlobalRules := len(globalConfig.DefaultRuleSet.DomainRules) > 0 || len(globalConfig.DefaultRuleSet.MigrationRules) > 0
+	hasGlobalRules := len(activeRules(globalConfig.DefaultRuleSet.DomainRules)) > 0 ||
+		len(activeRules(globalConfig.DefaultRuleSet.MigrationRules)) > 0 ||
+		len(activeRules(globalConfig.DefaultRuleSet.EncodingRules)) > 0
 	if !hasGlobalRules {
 		return candidates
 	}
@@ -350,10 +382,14 @@ func checkRuleReferences(candidates []DeletionCandidate, allSchemas []SchemaInfo
 // extractSchemaRefsFromRules finds subject:version references in rule params.
 func extractSchemaRefsFromRules(ruleSet *RuleSet) []string {
 	var refs []string
-	allRules := make([]Rule, 0, len(ruleSet.DomainRules)+len(ruleSet.MigrationRules))
+	allRules := make([]Rule, 0, len(ruleSet.DomainRules)+len(ruleSet.MigrationRules)+len(ruleSet.EncodingRules))
 	allRules = append(allRules, ruleSet.DomainRules...)
 	allRules = append(allRules, ruleSet.MigrationRules...)
+	allRules = append(allRules, ruleSet.EncodingRules...)
 	for _, rule := range allRules {
+		if rule.Disabled {
+			continue
+		}
 		for _, v := range rule.Params {
 			if strings.Contains(v, ":") {
 				parts := strings.SplitN(v, ":", 2)

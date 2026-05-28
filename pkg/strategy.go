@@ -47,7 +47,7 @@ func ResolveTopics(subjects []string, strategy string, explicitTopics []string, 
 	case "topic-record-name":
 		return resolveTopicRecordName(subjects, platform, clusters)
 	case "record-name":
-		return nil, fmt.Errorf("--topics or --scan-all-topics is required with record-name strategy")
+		return nil, fmt.Errorf("--topics or --all-topics is required with record-name strategy")
 	default:
 		topics := ExtractTopicFromSubject(subjects)
 		return matchTopicsToClusters(topics, platform, clusters)

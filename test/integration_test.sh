@@ -131,9 +131,9 @@ for topic in orders payments users; do
 done
 
 echo ""
-echo "=== Step 9: Run dry-run against CP ==="
-echo "Running: $TOOL --platform cp --cp-config-file test/cp-config-noauth.json --all --dry-run --output test/manifest-output.json --scan-all-topics"
-$TOOL --platform cp --cp-config-file test/cp-config-noauth.json --all --dry-run --output test/manifest-output.json --scan-all-topics 2>&1 || true
+echo "=== Step 9: Run scan against CP ==="
+echo "Running: $TOOL scan --platform cp --config-file test/cp-config-noauth.json --all-subjects --all-topics --output test/manifest-output.json"
+$TOOL scan --platform cp --config-file test/cp-config-noauth.json --all-subjects --all-topics --output test/manifest-output.json 2>&1 || true
 
 echo ""
 echo "=== Step 10: Check manifest output ==="
@@ -157,7 +157,7 @@ fi
 echo ""
 echo "=== Step 11: Test --context filter ==="
 echo "Running with --context staging"
-$TOOL --platform cp --cp-config-file test/cp-config-noauth.json --all --dry-run --context staging --scan-all-topics 2>&1 || true
+$TOOL scan --platform cp --config-file test/cp-config-noauth.json --all-subjects --all-topics --context staging 2>&1 || true
 
 echo ""
 echo "=== Integration test complete ==="

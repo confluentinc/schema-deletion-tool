@@ -433,6 +433,106 @@ func TestEncodeSubject(t *testing.T) {
 	req.Equal("com.example.Order", encodeSubject("com.example.Order"))
 }
 
+func TestCPPlatform_GetReferencedBy_404(t *testing.T) {
+	req := require.New(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error_code":40403,"message":"Subject not found"}`))
+	}))
+	defer server.Close()
+
+	cp, err := NewCPPlatform(CPConfig{
+		SchemaRegistry: CPSRConfig{URL: server.URL, Auth: "none"},
+		Clusters:       []CPClusterConfig{{Name: "test", BootstrapServers: "localhost:9092"}},
+	})
+	req.NoError(err)
+
+	// 404 should return nil, nil (fail open)
+	refs, err := cp.GetReferencedBy("orders-value", "1")
+	req.NoError(err)
+	req.Nil(refs)
+}
+
+func TestCPPlatform_GetReferencedBy_500(t *testing.T) {
+	req := require.New(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		w.Write([]byte(`{"error_code":500,"message":"Internal Server Error"}`))
+	}))
+	defer server.Close()
+
+	cp, err := NewCPPlatform(CPConfig{
+		SchemaRegistry: CPSRConfig{URL: server.URL, Auth: "none"},
+		Clusters:       []CPClusterConfig{{Name: "test", BootstrapServers: "localhost:9092"}},
+	})
+	req.NoError(err)
+
+	// 500 should return an error (not silently swallowed)
+	_, err = cp.GetReferencedBy("orders-value", "1")
+	req.Error(err)
+	req.Contains(err.Error(), "500")
+}
+
+func TestCPPlatform_GetSubjectConfig_404(t *testing.T) {
+	req := require.New(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error_code":40401,"message":"Subject not found"}`))
+	}))
+	defer server.Close()
+
+	cp, err := NewCPPlatform(CPConfig{
+		SchemaRegistry: CPSRConfig{URL: server.URL, Auth: "none"},
+		Clusters:       []CPClusterConfig{{Name: "test", BootstrapServers: "localhost:9092"}},
+	})
+	req.NoError(err)
+
+	// 404 means no subject-level config — return empty config, no error
+	config, err := cp.GetSubjectConfig("orders-value")
+	req.NoError(err)
+	req.Empty(config.CompatibilityLevel)
+}
+
+func TestCPPlatform_GetSubjectConfig_500(t *testing.T) {
+	req := require.New(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		w.Write([]byte(`{"error_code":500,"message":"Internal Server Error"}`))
+	}))
+	defer server.Close()
+
+	cp, err := NewCPPlatform(CPConfig{
+		SchemaRegistry: CPSRConfig{URL: server.URL, Auth: "none"},
+		Clusters:       []CPClusterConfig{{Name: "test", BootstrapServers: "localhost:9092"}},
+	})
+	req.NoError(err)
+
+	// 500 should propagate as error
+	_, err = cp.GetSubjectConfig("orders-value")
+	req.Error(err)
+	req.Contains(err.Error(), "500")
+}
+
+func TestCPPlatform_GetGlobalConfig_500(t *testing.T) {
+	req := require.New(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		w.Write([]byte(`{"error_code":500,"message":"Internal Server Error"}`))
+	}))
+	defer server.Close()
+
+	cp, err := NewCPPlatform(CPConfig{
+		SchemaRegistry: CPSRConfig{URL: server.URL, Auth: "none"},
+		Clusters:       []CPClusterConfig{{Name: "test", BootstrapServers: "localhost:9092"}},
+	})
+	req.NoError(err)
+
+	// 500 should propagate as error
+	_, err = cp.GetGlobalConfig()
+	req.Error(err)
+	req.Contains(err.Error(), "500")
+}
+
 func TestBuildCPKafkaConfig_Plaintext(t *testing.T) {
 	req := require.New(t)
 	c := &CPClusterConfig{

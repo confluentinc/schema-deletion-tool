@@ -44,11 +44,15 @@ func VerifySubject(subject string) bool {
 }
 
 func ExtractTopicFromSubject(subjects []string) []string {
+	seen := make(map[string]bool)
 	var topics []string
 	for _, subject := range subjects {
 		rawSubject := GetRawSubject(subject)
 		topic := strings.TrimSuffix(strings.TrimSuffix(rawSubject, "-value"), "-key")
-		topics = append(topics, topic)
+		if !seen[topic] {
+			seen[topic] = true
+			topics = append(topics, topic)
+		}
 	}
 	return topics
 }

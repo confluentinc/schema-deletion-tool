@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -13,6 +14,7 @@ func WriteManifest(path string, candidates []DeletionCandidate, opts ManifestOpt
 	for id := range opts.ActiveSchemaIDs {
 		activeIDs = append(activeIDs, id)
 	}
+	sort.Slice(activeIDs, func(i, j int) bool { return activeIDs[i] < activeIDs[j] })
 
 	manifest := Manifest{
 		ManifestVersion: "1",

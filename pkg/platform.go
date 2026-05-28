@@ -56,12 +56,14 @@ type Rule struct {
 	Type   string `json:"type"`
 	Mode   string `json:"mode,omitempty"`
 	Expr   string `json:"expr,omitempty"`
-	Params map[string]string `json:"params,omitempty"`
+	Params   map[string]string `json:"params,omitempty"`
+	Disabled bool              `json:"disabled,omitempty"`
 }
 
 type RuleSet struct {
 	MigrationRules []Rule `json:"migrationRules,omitempty"`
 	DomainRules    []Rule `json:"domainRules,omitempty"`
+	EncodingRules  []Rule `json:"encodingRules,omitempty"`
 }
 
 type SchemaReference struct {

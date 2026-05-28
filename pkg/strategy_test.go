@@ -85,7 +85,7 @@ func TestResolveTopics_RecordNameRequiresTopics(t *testing.T) {
 
 	_, err := ResolveTopics([]string{"com.example.Order"}, "record-name", nil, false, mock, []string{"cluster-1"})
 	req.Error(err)
-	req.Contains(err.Error(), "--topics or --scan-all-topics")
+	req.Contains(err.Error(), "--topics or --all-topics")
 }
 
 func TestResolveTopics_TopicRecordName(t *testing.T) {
