@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 )
 
 func CreateConsumer(bootstrapServer string, credentials Credentials) (*kafka.Consumer, error) {
