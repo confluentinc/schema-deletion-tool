@@ -3,7 +3,6 @@ package pkg
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/jedib0t/go-pretty/v6/table"
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -46,53 +44,19 @@ func VerifySubject(subject string) bool {
 }
 
 func ExtractTopicFromSubject(subjects []string) []string {
+	seen := make(map[string]bool)
 	var topics []string
 	for _, subject := range subjects {
-		var rawSubject string
-		if !strings.HasPrefix(subject, CONTEXT_PREFIX) {
-			rawSubject = subject
-		} else {
-			rawSubject = subject[len(CONTEXT_PREFIX):]
-			idx := strings.Index(rawSubject, CONTEXT_SUFFIX)
-			if idx == -1 {
-				rawSubject = subject
-			} else {
-				rawSubject = rawSubject[idx+1:]
-			}
-		}
+		rawSubject := GetRawSubject(subject)
 		topic := strings.TrimSuffix(strings.TrimSuffix(rawSubject, "-value"), "-key")
-		topics = append(topics, topic)
+		if !seen[topic] {
+			seen[topic] = true
+			topics = append(topics, topic)
+		}
 	}
 	return topics
 }
 
-func ValidateParams(cmd *cobra.Command) (string, bool, error) {
-	if !cmd.Flags().Changed("all") && !cmd.Flags().Changed("subject") {
-		return "", false, errors.New("at least one of --subject or --all must be specified")
-	}
-	if cmd.Flags().Changed("all") && cmd.Flags().Changed("subject") {
-		return "", false, errors.New("only one of --subject or --all can be specified")
-	}
-
-	if cmd.Flags().Changed("subject") {
-		subject, err := cmd.Flags().GetString("subject")
-		if err != nil {
-			return "", false, err
-		}
-		if !VerifySubject(subject) {
-			return "", false, errors.New("only subjects from TopicNameStrategy is supported")
-		}
-	}
-	subject, err := cmd.Flags().GetString("subject")
-	if err != nil {
-		return "", false, err
-	}
-	cleanAll, err := cmd.Flags().GetBool("all")
-	if err != nil {
-		return "", false, err
-	}
-	return subject, cleanAll, nil
-}
 
 func PrintTable(fields []interface{}, objects interface{}, includeOrder bool) {
 	if includeOrder {

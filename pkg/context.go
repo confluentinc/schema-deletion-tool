@@ -3,16 +3,15 @@ package pkg
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
+	"syscall"
 
-	"github.com/havoc-io/gopass"
+	"golang.org/x/term"
 )
 
 type Context struct {
 	Credentials map[string]Credentials
 	Clusters    []string
-	Subjects    []string
-	Topics      []string
 }
 
 func NewContext(configFile string) (*Context, error) {
@@ -29,8 +28,8 @@ func NewContext(configFile string) (*Context, error) {
 	}, nil
 }
 
-func (ctx *Context) SetClusters(clusters []string) error {
-	if err := ctx.promptCredentials(clusters); err != nil {
+func (ctx *Context) SetClusters(clusters []string, force bool) error {
+	if err := ctx.resolveCredentials(clusters, force); err != nil {
 		return err
 	}
 	ctx.Clusters = clusters
@@ -38,7 +37,7 @@ func (ctx *Context) SetClusters(clusters []string) error {
 }
 
 func loadConfig(configFile string) (map[string]Credentials, error) {
-	content, err := ioutil.ReadFile(configFile)
+	content, err := os.ReadFile(configFile)
 	if err != nil {
 		return nil, err
 	}
@@ -49,10 +48,13 @@ func loadConfig(configFile string) (map[string]Credentials, error) {
 	return credentials, nil
 }
 
-func (ctx *Context) promptCredentials(clusters []string) error {
+func (ctx *Context) resolveCredentials(clusters []string, force bool) error {
 	for _, cluster := range clusters {
 		if _, ok := ctx.Credentials[cluster]; ok {
 			continue
+		}
+		if force {
+			return fmt.Errorf("no credentials for cluster %s; provide them via --config-file when using --force", cluster)
 		}
 		fmt.Printf("Enter your API Key for Kafka cluster %s: ", cluster)
 		apiKey, err := ReadLine()
@@ -60,7 +62,8 @@ func (ctx *Context) promptCredentials(clusters []string) error {
 			return err
 		}
 		fmt.Printf("Enter your API secret for Kafka cluster %s: ", cluster)
-		apiSecret, err := gopass.GetPasswdMasked()
+		apiSecret, err := term.ReadPassword(int(syscall.Stdin))
+		fmt.Println()
 		if err != nil {
 			return err
 		}
