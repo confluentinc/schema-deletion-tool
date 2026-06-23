@@ -336,6 +336,9 @@ func (cp *CPPlatform) CreateConsumerConfig(clusterID string, creds Credentials) 
 	if err = configMap.SetKey("auto.offset.reset", "earliest"); err != nil {
 		return nil, err
 	}
+	if err = configMap.SetKey("enable.partition.eof", true); err != nil {
+		return nil, err
+	}
 	return configMap, nil
 }
 

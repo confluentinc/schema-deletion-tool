@@ -25,11 +25,12 @@ func TestWriteAndReadManifest(t *testing.T) {
 	}
 
 	opts := ManifestOptions{
-		Platform:        "cloud",
-		Strategy:        "topic-name",
-		ScannedTopics:   []string{"orders", "users", "payments"},
-		ScannedClusters: []string{"lkc-123"},
-		ActiveSchemaIDs: map[int32]int{100: VALUEONLY, 300: VALUEONLY},
+		Platform:         "cloud",
+		Strategy:         "topic-name",
+		ScannedTopics:    []string{"orders", "users", "payments"},
+		ScannedClusters:  []string{"lkc-123"},
+		ActiveSchemaIDs:  map[int32]int{100: VALUEONLY, 300: VALUEONLY},
+		UnverifiedTopics: []string{"users"},
 	}
 
 	err := WriteManifest(path, candidates, opts)
@@ -47,6 +48,7 @@ func TestWriteAndReadManifest(t *testing.T) {
 	req.Equal("validateAge", manifest.Candidates[2].Rules.DomainRules[0].Name)
 	req.Len(manifest.ScannedTopics, 3)
 	req.Len(manifest.ScannedClusters, 1)
+	req.Equal([]string{"users"}, manifest.UnverifiedTopics)
 }
 
 func TestReadManifest_MissingSubject(t *testing.T) {

@@ -33,80 +33,93 @@ func ScanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, e
 	return scanActiveSchemas(consumer, topic)
 }
 
+// scanPollTimeoutMs is how long each Poll waits for a message or EOF event.
+// scanDeadline caps the total time spent on a single topic as a backstop in
+// case partition EOF is never reported.
+const (
+	scanPollTimeoutMs = 5000
+	scanDeadline      = 5 * time.Minute
+)
+
 func scanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, error) {
 	activeSchemas := make(map[int32]int)
 	metadata, err := consumer.GetMetadata(&topic, false, 5000)
 	if err != nil {
 		return nil, err
 	}
-	DesiredNumPartitions := int32(len(metadata.Topics[topic].Partitions))
-	var tpl []kafka.TopicPartition
-	var topicName = topic
-	for i := int32(0); i < DesiredNumPartitions; i++ {
+	numPartitions := int32(len(metadata.Topics[topic].Partitions))
+	if numPartitions == 0 {
+		return nil, fmt.Errorf("no partition metadata returned (topic may not exist)")
+	}
+
+	topicName := topic
+	tpl := make([]kafka.TopicPartition, 0, numPartitions)
+	var totalMsg int64
+	for i := int32(0); i < numPartitions; i++ {
+		low, high, err := consumer.QueryWatermarkOffsets(topic, i, 10000)
+		if err != nil {
+			return nil, err
+		}
+		totalMsg += high - low
 		tpl = append(tpl, kafka.TopicPartition{
 			Topic:     &topicName,
 			Partition: i,
 			Offset:    kafka.OffsetBeginning,
 		})
 	}
-	err = consumer.Assign(tpl)
-	if err != nil {
-		return nil, err
-	}
-
-	var totalMsg int64 = 0
-	endOffsets := make(map[int32]kafka.Offset)
-	offsets := make(map[int32]kafka.Offset)
-	for i := int32(0); i < DesiredNumPartitions; i++ {
-		low, high, err := consumer.QueryWatermarkOffsets(topic, i, 10000)
-		if err != nil {
-			return nil, err
-		}
-		endOffsets[i] = kafka.Offset(high) - 1
-		offsets[i] = kafka.Offset(low) - 1
-		totalMsg += high - low
-	}
 
 	if totalMsg == 0 {
-		fmt.Println("No messages found, skipping...")
+		fmt.Printf("Topic %s: no messages found, skipping.\n", topic)
 		return activeSchemas, nil
 	}
 
-	deadline := time.Now().Add(5 * time.Minute) // per-topic scan deadline
-	consecutiveTimeouts := 0
-	maxConsecutiveTimeouts := 3
+	if err := consumer.Assign(tpl); err != nil {
+		return nil, err
+	}
 
-	for !checkIfReachesOffsets(endOffsets, offsets, DesiredNumPartitions) {
+	// Terminate when every partition reports EOF rather than by comparing the
+	// last consumed offset to the high watermark. The offset just below the
+	// watermark can be a transaction control record or removed by compaction;
+	// such offsets are never delivered to the consumer, so an offset comparison
+	// would never reach the watermark and the scan would hang. Partition EOF
+	// requires enable.partition.eof=true on the consumer config.
+	//
+	// The deadline backstops the case where EOF is never reported (e.g. a
+	// partition stuck behind a persistent non-fatal error). It returns an error
+	// so the caller marks the topic unverified instead of mistaking an
+	// incomplete scan for a complete one and deleting in-use schemas.
+	deadline := time.Now().Add(scanDeadline)
+	eofPartitions := make(map[int32]bool)
+	for !allPartitionsReachedEOF(eofPartitions, numPartitions) {
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("topic %s: scan deadline exceeded (5 minutes)", topic)
+			return nil, fmt.Errorf("scan deadline exceeded after %s", scanDeadline)
 		}
-
-		msg, err := consumer.ReadMessage(10 * time.Second)
-		if err != nil {
-			// ReadMessage timeout is not fatal — it means no message available within the timeout
-			kafkaErr, ok := err.(kafka.Error)
-			if ok && kafkaErr.Code() == kafka.ErrTimedOut {
-				consecutiveTimeouts++
-				if consecutiveTimeouts >= maxConsecutiveTimeouts {
-					// After 3 consecutive timeouts (30s), assume we've read everything available
-					break
-				}
-				continue
-			}
+		if err := handlePollEvent(consumer.Poll(scanPollTimeoutMs), topic, activeSchemas, eofPartitions); err != nil {
 			return nil, err
 		}
-		consecutiveTimeouts = 0
-		offsets[msg.TopicPartition.Partition] = msg.TopicPartition.Offset
-
-		// Extract schema IDs from payload (magic byte prefix)
-		extractSchemaIDFromPayload(msg.Value, VALUEONLY, activeSchemas)
-		extractSchemaIDFromPayload(msg.Key, KEYONLY, activeSchemas)
-
-		// Extract schema IDs from headers (HeaderSchemaIdSerializer)
-		extractSchemaIDsFromHeaders(msg.Headers, activeSchemas)
 	}
 
 	return activeSchemas, nil
+}
+
+// handlePollEvent records schema IDs from a polled message and tracks partitions
+// that have reached EOF. It returns an error only for a fatal kafka.Error;
+// non-fatal errors are logged and skipped, and a nil event (poll timeout) is a no-op.
+func handlePollEvent(event kafka.Event, topic string, activeSchemas map[int32]int, eofPartitions map[int32]bool) error {
+	switch e := event.(type) {
+	case *kafka.Message:
+		extractSchemaIDFromPayload(e.Value, VALUEONLY, activeSchemas)
+		extractSchemaIDFromPayload(e.Key, KEYONLY, activeSchemas)
+		extractSchemaIDsFromHeaders(e.Headers, activeSchemas)
+	case kafka.PartitionEOF:
+		eofPartitions[e.Partition] = true
+	case kafka.Error:
+		if e.IsFatal() {
+			return e
+		}
+		fmt.Printf("%swarning: topic %s: %v%s\n", YELLOW, topic, e, RESET)
+	}
+	return nil
 }
 
 // extractSchemaIDFromPayload extracts schema ID from the Confluent wire format:
@@ -172,14 +185,9 @@ func parseSchemaIDFromHeaderValue(value []byte) int32 {
 	return 0
 }
 
-func checkIfReachesOffsets(endOffsets, offsets map[int32]kafka.Offset, partitions int32) bool {
+func allPartitionsReachedEOF(eofPartitions map[int32]bool, partitions int32) bool {
 	for i := int32(0); i < partitions; i++ {
-		val, ok := offsets[i]
-		if !ok {
-			val = -1
-		}
-		endVal, _ := endOffsets[i]
-		if val < endVal {
+		if !eofPartitions[i] {
 			return false
 		}
 	}

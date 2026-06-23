@@ -115,9 +115,25 @@ func runScan(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Scan topics for active schema IDs
-	activeSchemas, err := scanTopicsForActiveSchemas(topicsWithCluster, platform, ctx, workers)
+	activeSchemas, failedTopics, err := scanTopicsForActiveSchemas(topicsWithCluster, platform, ctx, workers)
 	if err != nil {
 		return err
+	}
+
+	scannedTopics := make([]string, len(topicsWithCluster))
+	for i, t := range topicsWithCluster {
+		scannedTopics[i] = t.Topic
+	}
+
+	// Subjects tied to a topic we couldn't scan have unverifiable usage; block
+	// them so a partial scan can never delete a schema that is still in use.
+	unverifiedSubjects := pkg.SubjectsForFailedTopics(failedTopics, subjects, scannedTopics, strategy)
+	if len(failedTopics) > 0 {
+		fmt.Printf("\n%s%d topic(s) could not be scanned; %d subject(s) tied to them will be marked unverified and excluded from deletion:%s\n",
+			pkg.YELLOW, len(failedTopics), len(unverifiedSubjects), pkg.RESET)
+		for _, t := range failedTopics {
+			fmt.Printf("  - %s\n", t)
+		}
 	}
 
 	// Run safety analysis
@@ -128,6 +144,7 @@ func runScan(cmd *cobra.Command, _ []string) error {
 	}
 
 	candidates = pkg.CheckCompatibility(candidates, platform)
+	candidates = pkg.MarkUnverified(candidates, unverifiedSubjects)
 
 	if len(candidates) == 0 {
 		fmt.Println("No unused schemas found.")
@@ -138,16 +155,13 @@ func runScan(cmd *cobra.Command, _ []string) error {
 
 	// Write manifest if output specified
 	if outputFile != "" {
-		scannedTopics := make([]string, len(topicsWithCluster))
-		for i, t := range topicsWithCluster {
-			scannedTopics[i] = t.Topic
-		}
 		return pkg.WriteManifest(outputFile, candidates, pkg.ManifestOptions{
-			Platform:        platformFlag,
-			Strategy:        strategy,
-			ScannedTopics:   scannedTopics,
-			ScannedClusters: ctx.Clusters,
-			ActiveSchemaIDs: activeSchemas,
+			Platform:         platformFlag,
+			Strategy:         strategy,
+			ScannedTopics:    scannedTopics,
+			ScannedClusters:  ctx.Clusters,
+			ActiveSchemaIDs:  activeSchemas,
+			UnverifiedTopics: failedTopics,
 		})
 	}
 
@@ -285,9 +299,22 @@ func setupContext(platform pkg.Platform, platformFlag, configFile string, force 
 	return ctx, ctx.SetClusters(clusterIDs, force)
 }
 
-func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.Platform, ctx *pkg.Context, workers int) (map[int32]int, error) {
+// scanResult is the outcome of scanning a single topic.
+type scanResult struct {
+	schemas map[int32]int
+	err     error
+	topic   string
+	cluster string
+}
+
+// scanTopicsForActiveSchemas scans every topic and returns the merged active
+// schema IDs plus the names of topics that could not be scanned. Per-topic
+// failures do not abort the run; callers must treat schemas tied to the returned
+// failedTopics as unverified. A non-nil error is only returned for setup
+// failures that prevent scanning entirely (e.g. cluster endpoint resolution).
+func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.Platform, ctx *pkg.Context, workers int) (map[int32]int, []string, error) {
 	if len(topics) == 0 {
-		return make(map[int32]int), nil
+		return make(map[int32]int), nil, nil
 	}
 
 	// Resolve endpoints per cluster (cache to avoid repeated calls)
@@ -296,19 +323,13 @@ func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.
 		if _, ok := endpoints[topic.ClusterID]; !ok {
 			endpoint, err := platform.DescribeCluster(topic.ClusterID)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			endpoints[topic.ClusterID] = endpoint
 		}
 	}
 
 	// Scan topics concurrently
-	type scanResult struct {
-		schemas map[int32]int
-		err     error
-		topic   string
-	}
-
 	results := make(chan scanResult, len(topics))
 	sem := make(chan struct{}, workers)
 
@@ -322,46 +343,57 @@ func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.
 			creds := ctx.Credentials[t.ClusterID]
 			ccfg, err := platform.CreateConsumerConfig(t.ClusterID, creds)
 			if err != nil {
-				results <- scanResult{err: err, topic: t.Topic}
+				results <- scanResult{err: err, topic: t.Topic, cluster: t.ClusterID}
 				return
 			}
 			if err = ccfg.SetKey("bootstrap.servers", endpoints[t.ClusterID]); err != nil {
-				results <- scanResult{err: err, topic: t.Topic}
+				results <- scanResult{err: err, topic: t.Topic, cluster: t.ClusterID}
 				return
 			}
 
 			consumer, err := pkg.CreateConsumerFromConfig(ccfg)
 			if err != nil {
-				results <- scanResult{err: err, topic: t.Topic}
+				results <- scanResult{err: err, topic: t.Topic, cluster: t.ClusterID}
 				return
 			}
 			defer consumer.Close()
 
 			topicSchemas, err := pkg.ScanActiveSchemas(consumer, t.Topic)
-			results <- scanResult{schemas: topicSchemas, err: err, topic: t.Topic}
+			results <- scanResult{schemas: topicSchemas, err: err, topic: t.Topic, cluster: t.ClusterID}
 		}(topic)
 	}
 
-	// Collect results
-	activeSchemas := make(map[int32]int)
-	var firstErr error
+	// Collect every result before deciding. A single unscannable topic must not
+	// discard the work done for the others, and the user should see all failures
+	// at once instead of fixing them one re-run at a time.
+	collected := make([]scanResult, 0, len(topics))
 	for i := 0; i < len(topics); i++ {
 		r := <-results
 		if r.err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("error scanning topic %s: %w", r.topic, r.err)
-			}
+			fmt.Printf("%swarning: failed to scan topic %s (cluster %s): %v%s\n", pkg.YELLOW, r.topic, r.cluster, r.err, pkg.RESET)
+		}
+		collected = append(collected, r)
+	}
+
+	activeSchemas, failedTopics := mergeActiveSchemas(collected)
+	return activeSchemas, failedTopics, nil
+}
+
+// mergeActiveSchemas OR-merges per-topic schema results and returns the names of
+// topics that failed to scan.
+func mergeActiveSchemas(results []scanResult) (map[int32]int, []string) {
+	activeSchemas := make(map[int32]int)
+	var failedTopics []string
+	for _, r := range results {
+		if r.err != nil {
+			failedTopics = append(failedTopics, r.topic)
 			continue
 		}
 		for k, v := range r.schemas {
 			activeSchemas[k] = activeSchemas[k] | v
 		}
 	}
-
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	return activeSchemas, nil
+	return activeSchemas, failedTopics
 }
 
 func printCandidateSummary(candidates []pkg.DeletionCandidate) {

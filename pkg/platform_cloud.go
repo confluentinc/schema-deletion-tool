@@ -253,6 +253,9 @@ func (c *CloudPlatform) CreateConsumerConfig(clusterID string, creds Credentials
 	if err := ccfg.SetKey("auto.offset.reset", "earliest"); err != nil {
 		return nil, err
 	}
+	if err := ccfg.SetKey("enable.partition.eof", true); err != nil {
+		return nil, err
+	}
 	return ccfg, nil
 }
 
