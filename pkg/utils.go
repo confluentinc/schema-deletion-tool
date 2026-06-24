@@ -43,10 +43,15 @@ func VerifySubject(subject string) bool {
 	return IsValueSchema(subject) || IsKeySchema(subject)
 }
 
-// TopicFromSubject strips the context prefix and the -value/-key suffix to
-// recover the topic name for a TopicNameStrategy subject.
+// TopicFromSubject recovers the topic for a TopicNameStrategy subject by
+// stripping the context prefix and exactly one -value/-key suffix. Removing only
+// one suffix keeps topics whose names end in -key/-value intact.
 func TopicFromSubject(subject string) string {
-	return strings.TrimSuffix(strings.TrimSuffix(GetRawSubject(subject), "-value"), "-key")
+	raw := GetRawSubject(subject)
+	if t := strings.TrimSuffix(raw, "-value"); t != raw {
+		return t
+	}
+	return strings.TrimSuffix(raw, "-key")
 }
 
 func ExtractTopicFromSubject(subjects []string) []string {

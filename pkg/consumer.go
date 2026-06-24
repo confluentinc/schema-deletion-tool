@@ -88,11 +88,12 @@ func scanActiveSchemas(consumer *kafka.Consumer, topic string, timeout time.Dura
 	// one and deleting in-use schemas.
 	deadline := time.Now().Add(timeout)
 	eofPartitions := make(map[int32]bool)
+	loggedErrs := make(map[kafka.ErrorCode]bool)
 	for !allPartitionsReachedEOF(eofPartitions, numPartitions) {
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("scan deadline exceeded after %s", timeout)
 		}
-		if err := handlePollEvent(consumer.Poll(scanPollTimeoutMs), topic, activeSchemas, eofPartitions); err != nil {
+		if err := handlePollEvent(consumer.Poll(scanPollTimeoutMs), topic, activeSchemas, eofPartitions, loggedErrs); err != nil {
 			return nil, err
 		}
 	}
@@ -100,10 +101,10 @@ func scanActiveSchemas(consumer *kafka.Consumer, topic string, timeout time.Dura
 	return activeSchemas, nil
 }
 
-// handlePollEvent records schema IDs from a polled message and tracks partitions
-// that have reached EOF. It returns an error only for a fatal kafka.Error;
-// non-fatal errors are logged and skipped, and a nil event (poll timeout) is a no-op.
-func handlePollEvent(event kafka.Event, topic string, activeSchemas map[int32]int, eofPartitions map[int32]bool) error {
+// handlePollEvent records schema IDs from a message and marks partitions that
+// reached EOF. It errors only on a fatal kafka.Error; a non-fatal error is
+// logged once per distinct code, and a nil event (poll timeout) is a no-op.
+func handlePollEvent(event kafka.Event, topic string, activeSchemas map[int32]int, eofPartitions map[int32]bool, loggedErrs map[kafka.ErrorCode]bool) error {
 	switch e := event.(type) {
 	case *kafka.Message:
 		extractSchemaIDFromPayload(e.Value, VALUEONLY, activeSchemas)
@@ -115,7 +116,10 @@ func handlePollEvent(event kafka.Event, topic string, activeSchemas map[int32]in
 		if e.IsFatal() {
 			return e
 		}
-		fmt.Printf("%swarning: topic %s: %v%s\n", YELLOW, topic, e, RESET)
+		if !loggedErrs[e.Code()] {
+			loggedErrs[e.Code()] = true
+			fmt.Printf("%swarning: topic %s: %v%s\n", YELLOW, topic, e, RESET)
+		}
 	}
 	return nil
 }

@@ -68,6 +68,31 @@ func TestMarkUnverified(t *testing.T) {
 	req.False(got[1].IsBlocked())
 }
 
+func TestMarkUnverified_PreservesSpecificBlockStatus(t *testing.T) {
+	req := require.New(t)
+	candidates := []DeletionCandidate{
+		{Subject: "orders-value", Status: StatusBlockedByReferences,
+			BlockReasons: []string{"Referenced by active schema IDs: [300]"}},
+	}
+	got := MarkUnverified(candidates, map[string]bool{"orders-value": true})
+
+	req.Equal(StatusBlockedByReferences, got[0].Status)
+	req.Len(got[0].BlockReasons, 2)
+	req.Contains(got[0].BlockReasons[1], "could not be scanned")
+}
+
+func TestMarkUnverified_UpgradesWarnedToBlocked(t *testing.T) {
+	req := require.New(t)
+	candidates := []DeletionCandidate{
+		{Subject: "orders-value", Status: StatusWarnHasDomainRules},
+	}
+	got := MarkUnverified(candidates, map[string]bool{"orders-value": true})
+
+	// A warned candidate is deletable-with-confirmation, so it must be blocked.
+	req.Equal(StatusBlockedUnverified, got[0].Status)
+	req.True(got[0].IsBlocked())
+}
+
 func TestMarkUnverified_NoUnverified(t *testing.T) {
 	req := require.New(t)
 	candidates := []DeletionCandidate{{Subject: "orders-value", Status: StatusSafe}}

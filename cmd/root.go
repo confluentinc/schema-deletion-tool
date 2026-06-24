@@ -389,9 +389,14 @@ func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.
 func mergeActiveSchemas(results []scanResult) (map[int32]int, []string) {
 	activeSchemas := make(map[int32]int)
 	var failedTopics []string
+	seenFailed := make(map[string]bool)
 	for _, r := range results {
 		if r.err != nil {
-			failedTopics = append(failedTopics, r.topic)
+			// The same topic can fail in more than one cluster; report it once.
+			if !seenFailed[r.topic] {
+				seenFailed[r.topic] = true
+				failedTopics = append(failedTopics, r.topic)
+			}
 			continue
 		}
 		for k, v := range r.schemas {
@@ -416,7 +421,7 @@ func printCandidateSummary(candidates []pkg.DeletionCandidate) {
 	}
 }
 
-func Execute() {
+func newRootCmd() *cobra.Command {
 	var rootCmd = &cobra.Command{
 		Use:   "confluent schema-registry cleanup",
 		Short: "Schema deletion tool - discover and delete unused schemas",
@@ -478,8 +483,11 @@ Deletion modes:
 	deleteCmd.MarkFlagRequired("from-file")
 
 	rootCmd.AddCommand(scanCmd, deleteCmd)
+	return rootCmd
+}
 
-	if err := rootCmd.Execute(); err != nil {
+func Execute() {
+	if err := newRootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
 }

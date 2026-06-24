@@ -339,6 +339,11 @@ func (cp *CPPlatform) CreateConsumerConfig(clusterID string, creds Credentials) 
 	if err = configMap.SetKey("enable.partition.eof", true); err != nil {
 		return nil, err
 	}
+	// EOF-based scan termination needs partition EOF at the last stable offset;
+	// pin this rather than rely on the librdkafka default.
+	if err = configMap.SetKey("isolation.level", "read_committed"); err != nil {
+		return nil, err
+	}
 	return configMap, nil
 }
 

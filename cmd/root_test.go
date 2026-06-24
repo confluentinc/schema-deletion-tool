@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -42,4 +43,27 @@ func TestMergeActiveSchemas_AllFail(t *testing.T) {
 	// must instead be protected via the failedTopics path.
 	req.Empty(active)
 	req.NotNil(active)
+}
+
+func TestMergeActiveSchemas_DedupsFailuresAcrossClusters(t *testing.T) {
+	req := require.New(t)
+	// Same topic name fails in two clusters; it should appear once, first-seen order.
+	_, failed := mergeActiveSchemas([]scanResult{
+		{topic: "orders", cluster: "lkc-1", err: errors.New("boom")},
+		{topic: "payments", cluster: "lkc-1", err: errors.New("boom")},
+		{topic: "orders", cluster: "lkc-2", err: errors.New("boom")},
+	})
+	req.Equal([]string{"orders", "payments"}, failed)
+}
+
+func TestRunScan_RejectsNonPositiveTimeout(t *testing.T) {
+	req := require.New(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"scan", "--all-subjects", "--scan-timeout=0"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	req.Error(err)
+	req.Contains(err.Error(), "scan-timeout must be positive")
 }

@@ -77,7 +77,11 @@ func MarkUnverified(candidates []DeletionCandidate, unverifiedSubjects map[strin
 	}
 	for i := range candidates {
 		if unverifiedSubjects[candidates[i].Subject] {
-			candidates[i].Status = StatusBlockedUnverified
+			// Keep an already-blocked candidate's more specific status; only
+			// safe/warned ones need upgrading to blocked.
+			if !candidates[i].IsBlocked() {
+				candidates[i].Status = StatusBlockedUnverified
+			}
 			candidates[i].BlockReasons = append(candidates[i].BlockReasons,
 				"Topic could not be scanned; schema usage could not be verified")
 		}

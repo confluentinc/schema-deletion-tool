@@ -38,6 +38,16 @@ func TestExtractTopicFromSubject(t *testing.T) {
 	req.Equal([]string{"orders", "payments", "users"}, ExtractTopicFromSubject(subjects))
 }
 
+func TestTopicFromSubject(t *testing.T) {
+	req := require.New(t)
+	req.Equal("orders", TopicFromSubject("orders-value"))
+	req.Equal("orders", TopicFromSubject("orders-key"))
+	req.Equal("orders", TopicFromSubject(":.mycontext:orders-value"))
+	// Topic names that themselves end in -key/-value: only one suffix is stripped.
+	req.Equal("orders-key", TopicFromSubject("orders-key-value"))
+	req.Equal("orders-value", TopicFromSubject("orders-value-key"))
+}
+
 func TestIsValidChoice(t *testing.T) {
 	req := require.New(t)
 	validCandidates := []string{

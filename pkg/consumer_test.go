@@ -32,7 +32,7 @@ func TestHandlePollEvent_Message(t *testing.T) {
 	value[0] = MagicByte
 	binary.BigEndian.PutUint32(value[1:MessageOffset], 7)
 
-	req.NoError(handlePollEvent(&kafka.Message{Value: value}, "orders", active, eof))
+	req.NoError(handlePollEvent(&kafka.Message{Value: value}, "orders", active, eof, map[kafka.ErrorCode]bool{}))
 	req.Equal(VALUEONLY, active[7])
 	req.Empty(eof)
 }
@@ -42,7 +42,7 @@ func TestHandlePollEvent_PartitionEOF(t *testing.T) {
 	active := make(map[int32]int)
 	eof := make(map[int32]bool)
 
-	req.NoError(handlePollEvent(kafka.PartitionEOF{Partition: 2}, "orders", active, eof))
+	req.NoError(handlePollEvent(kafka.PartitionEOF{Partition: 2}, "orders", active, eof, map[kafka.ErrorCode]bool{}))
 	req.True(eof[2])
 	req.Empty(active)
 }
@@ -50,24 +50,29 @@ func TestHandlePollEvent_PartitionEOF(t *testing.T) {
 func TestHandlePollEvent_FatalErrorReturned(t *testing.T) {
 	req := require.New(t)
 	err := handlePollEvent(kafka.NewError(kafka.ErrAllBrokersDown, "down", true),
-		"orders", make(map[int32]int), make(map[int32]bool))
+		"orders", make(map[int32]int), make(map[int32]bool), map[kafka.ErrorCode]bool{})
 	req.Error(err)
 }
 
-func TestHandlePollEvent_NonFatalErrorSkipped(t *testing.T) {
+func TestHandlePollEvent_NonFatalErrorLoggedOncePerCode(t *testing.T) {
 	req := require.New(t)
 	eof := make(map[int32]bool)
-	err := handlePollEvent(kafka.NewError(kafka.ErrOffsetOutOfRange, "transient", false),
-		"orders", make(map[int32]int), eof)
-	req.NoError(err)
+	logged := make(map[kafka.ErrorCode]bool)
+	e := kafka.NewError(kafka.ErrOffsetOutOfRange, "transient", false)
+
+	req.NoError(handlePollEvent(e, "orders", make(map[int32]int), eof, logged))
 	req.Empty(eof) // a non-fatal error must not be mistaken for EOF
+	req.True(logged[kafka.ErrOffsetOutOfRange])
+
+	// A repeat of the same code is deduped and still returns no error.
+	req.NoError(handlePollEvent(e, "orders", make(map[int32]int), eof, logged))
 }
 
 func TestHandlePollEvent_NilTimeout(t *testing.T) {
 	req := require.New(t)
 	active := make(map[int32]int)
 	eof := make(map[int32]bool)
-	req.NoError(handlePollEvent(nil, "orders", active, eof))
+	req.NoError(handlePollEvent(nil, "orders", active, eof, map[kafka.ErrorCode]bool{}))
 	req.Empty(active)
 	req.Empty(eof)
 }
