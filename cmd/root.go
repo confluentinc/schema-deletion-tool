@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/confluentinc/schema-deletion-tool/pkg"
 	"github.com/spf13/cobra"
@@ -22,6 +23,7 @@ func runScan(cmd *cobra.Command, _ []string) error {
 	outputFile, _ := cmd.Flags().GetString("output")
 	force, _ := cmd.Flags().GetBool("force")
 	workers, _ := cmd.Flags().GetInt("workers")
+	scanTimeout, _ := cmd.Flags().GetDuration("scan-timeout")
 	srURL, _ := cmd.Flags().GetString("sr-url")
 	srAPIKey, _ := cmd.Flags().GetString("sr-api-key")
 	srAPISecret, _ := cmd.Flags().GetString("sr-api-secret")
@@ -31,6 +33,9 @@ func runScan(cmd *cobra.Command, _ []string) error {
 	}
 	if workers > 100 {
 		workers = 100
+	}
+	if scanTimeout <= 0 {
+		return errors.New("--scan-timeout must be positive")
 	}
 
 	// Validate scan-specific flags
@@ -115,7 +120,7 @@ func runScan(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Scan topics for active schema IDs
-	activeSchemas, failedTopics, err := scanTopicsForActiveSchemas(topicsWithCluster, platform, ctx, workers)
+	activeSchemas, failedTopics, err := scanTopicsForActiveSchemas(topicsWithCluster, platform, ctx, workers, scanTimeout)
 	if err != nil {
 		return err
 	}
@@ -312,7 +317,7 @@ type scanResult struct {
 // failures do not abort the run; callers must treat schemas tied to the returned
 // failedTopics as unverified. A non-nil error is only returned for setup
 // failures that prevent scanning entirely (e.g. cluster endpoint resolution).
-func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.Platform, ctx *pkg.Context, workers int) (map[int32]int, []string, error) {
+func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.Platform, ctx *pkg.Context, workers int, scanTimeout time.Duration) (map[int32]int, []string, error) {
 	if len(topics) == 0 {
 		return make(map[int32]int), nil, nil
 	}
@@ -358,7 +363,7 @@ func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.
 			}
 			defer consumer.Close()
 
-			topicSchemas, err := pkg.ScanActiveSchemas(consumer, t.Topic)
+			topicSchemas, err := pkg.ScanActiveSchemas(consumer, t.Topic, scanTimeout)
 			results <- scanResult{schemas: topicSchemas, err: err, topic: t.Topic, cluster: t.ClusterID}
 		}(topic)
 	}
@@ -448,6 +453,7 @@ file that can be passed to the delete command.`,
 	scanCmd.Flags().Bool("all-topics", false, "Scan all topics across all clusters.")
 	scanCmd.Flags().String("context", "", "Schema context to scope operations to (e.g., 'staging').")
 	scanCmd.Flags().Int("workers", 25, "Number of concurrent topic scanners.")
+	scanCmd.Flags().Duration("scan-timeout", 5*time.Minute, "Per-topic scan deadline; topics exceeding it are marked unverified and excluded from deletion.")
 	scanCmd.Flags().String("output", "", "Path to write manifest file.")
 	scanCmd.Flags().String("sr-url", "", "Schema Registry URL (enables reference checking for Cloud).")
 	scanCmd.Flags().String("sr-api-key", "", "Schema Registry API key (for reference checking).")

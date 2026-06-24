@@ -28,20 +28,17 @@ func CreateConsumerFromConfig(ccfg *kafka.ConfigMap) (*kafka.Consumer, error) {
 
 // ScanActiveSchemas scans all messages in a topic and extracts schema IDs
 // from both the magic byte prefix in payloads AND from message headers
-// (for topics using HeaderSchemaIdSerializer).
-func ScanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, error) {
-	return scanActiveSchemas(consumer, topic)
+// (for topics using HeaderSchemaIdSerializer). timeout caps the time spent on
+// the topic; exceeding it returns an error so the caller treats the topic as
+// unscanned rather than as fully scanned.
+func ScanActiveSchemas(consumer *kafka.Consumer, topic string, timeout time.Duration) (map[int32]int, error) {
+	return scanActiveSchemas(consumer, topic, timeout)
 }
 
 // scanPollTimeoutMs is how long each Poll waits for a message or EOF event.
-// scanDeadline caps the total time spent on a single topic as a backstop in
-// case partition EOF is never reported.
-const (
-	scanPollTimeoutMs = 5000
-	scanDeadline      = 5 * time.Minute
-)
+const scanPollTimeoutMs = 5000
 
-func scanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, error) {
+func scanActiveSchemas(consumer *kafka.Consumer, topic string, timeout time.Duration) (map[int32]int, error) {
 	activeSchemas := make(map[int32]int)
 	metadata, err := consumer.GetMetadata(&topic, false, 5000)
 	if err != nil {
@@ -85,14 +82,15 @@ func scanActiveSchemas(consumer *kafka.Consumer, topic string) (map[int32]int, e
 	// requires enable.partition.eof=true on the consumer config.
 	//
 	// The deadline backstops the case where EOF is never reported (e.g. a
-	// partition stuck behind a persistent non-fatal error). It returns an error
-	// so the caller marks the topic unverified instead of mistaking an
-	// incomplete scan for a complete one and deleting in-use schemas.
-	deadline := time.Now().Add(scanDeadline)
+	// partition stuck behind a persistent non-fatal error) and bounds the time
+	// spent on a very large topic. It returns an error so the caller marks the
+	// topic unverified instead of mistaking an incomplete scan for a complete
+	// one and deleting in-use schemas.
+	deadline := time.Now().Add(timeout)
 	eofPartitions := make(map[int32]bool)
 	for !allPartitionsReachedEOF(eofPartitions, numPartitions) {
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("scan deadline exceeded after %s", scanDeadline)
+			return nil, fmt.Errorf("scan deadline exceeded after %s", timeout)
 		}
 		if err := handlePollEvent(consumer.Poll(scanPollTimeoutMs), topic, activeSchemas, eofPartitions); err != nil {
 			return nil, err
