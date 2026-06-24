@@ -180,6 +180,7 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 	fromFile, _ := cmd.Flags().GetString("from-file")
 	mode, _ := cmd.Flags().GetString("mode")
 	force, _ := cmd.Flags().GetBool("force")
+	allowUnverified, _ := cmd.Flags().GetBool("allow-unverified")
 
 	if platformFlag == "cp" && configFile == "" {
 		return errors.New("--config-file is required when --platform=cp")
@@ -205,6 +206,10 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	if err := failIfUnverified(manifest.UnverifiedTopics, allowUnverified); err != nil {
+		return err
+	}
+
 	platform, err := createPlatform(platformFlag, configFile, "", "", "")
 	if err != nil {
 		return err
@@ -212,6 +217,26 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 
 	fmt.Printf("Loaded manifest with %d candidate(s) (generated %s)\n", len(manifest.Candidates), manifest.GeneratedAt)
 	return pkg.ExecuteDeletion(manifest.Candidates, platform, softDelete, hardDelete, force)
+}
+
+// failIfUnverified blocks deletion from a manifest produced by an incomplete
+// scan unless --allow-unverified is set. --force deliberately does not bypass
+// this: automation routinely passes --force, so deleting from a partial scan
+// must be its own explicit opt-in.
+func failIfUnverified(unverifiedTopics []string, allowUnverified bool) error {
+	if len(unverifiedTopics) == 0 {
+		return nil
+	}
+	fmt.Printf("%sManifest lists %d topic(s) that could not be scanned; their schema usage is unverified:%s\n",
+		pkg.RED, len(unverifiedTopics), pkg.RESET)
+	for _, t := range unverifiedTopics {
+		fmt.Printf("  - %s\n", t)
+	}
+	if !allowUnverified {
+		return errors.New("refusing to delete from a manifest with unverified topics; re-scan those topics, or pass --allow-unverified to delete the verified-safe schemas anyway")
+	}
+	fmt.Printf("%s--allow-unverified set: proceeding with deletion of verified-safe schemas.%s\n", pkg.YELLOW, pkg.RESET)
+	return nil
 }
 
 func createPlatform(platformFlag, configFile, srURL, srAPIKey, srAPISecret string) (pkg.Platform, error) {
@@ -480,6 +505,7 @@ Deletion modes:
 	}
 	deleteCmd.Flags().String("from-file", "", "Path to manifest file from scan (required).")
 	deleteCmd.Flags().String("mode", "soft", "Deletion mode: 'soft', 'hard', or 'full'.")
+	deleteCmd.Flags().Bool("allow-unverified", false, "Delete verified-safe schemas even when the manifest has unverified topics (an incomplete scan). Not bypassed by --force.")
 	deleteCmd.MarkFlagRequired("from-file")
 
 	rootCmd.AddCommand(scanCmd, deleteCmd)

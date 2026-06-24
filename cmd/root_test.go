@@ -56,6 +56,19 @@ func TestMergeActiveSchemas_DedupsFailuresAcrossClusters(t *testing.T) {
 	req.Equal([]string{"orders", "payments"}, failed)
 }
 
+func TestFailIfUnverified(t *testing.T) {
+	req := require.New(t)
+	// No unverified topics: deletion proceeds regardless of the flag.
+	req.NoError(failIfUnverified(nil, false))
+	req.NoError(failIfUnverified([]string{}, false))
+
+	// Unverified topics present: refuse by default, allow with the flag.
+	err := failIfUnverified([]string{"orders"}, false)
+	req.Error(err)
+	req.Contains(err.Error(), "allow-unverified")
+	req.NoError(failIfUnverified([]string{"orders"}, true))
+}
+
 func TestRunScan_RejectsNonPositiveTimeout(t *testing.T) {
 	req := require.New(t)
 	cmd := newRootCmd()
