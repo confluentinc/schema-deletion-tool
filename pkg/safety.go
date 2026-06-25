@@ -67,6 +67,28 @@ func AnalyzeCandidates(schemas []SchemaInfo, activeSchemas map[int32]int, platfo
 	return candidates, nil
 }
 
+// MarkUnverified blocks candidates whose subject belongs to a topic that could
+// not be scanned. Active schema IDs are tracked globally across all topics, so a
+// schema seen only in an unscanned topic would otherwise look unused; blocking
+// these subjects ensures such schemas are never deleted.
+func MarkUnverified(candidates []DeletionCandidate, unverifiedSubjects map[string]bool) []DeletionCandidate {
+	if len(unverifiedSubjects) == 0 {
+		return candidates
+	}
+	for i := range candidates {
+		if unverifiedSubjects[candidates[i].Subject] {
+			// Keep an already-blocked candidate's more specific status; only
+			// safe/warned ones need upgrading to blocked.
+			if !candidates[i].IsBlocked() {
+				candidates[i].Status = StatusBlockedUnverified
+			}
+			candidates[i].BlockReasons = append(candidates[i].BlockReasons,
+				"Topic could not be scanned; schema usage could not be verified")
+		}
+	}
+	return candidates
+}
+
 func checkReferences(candidates []DeletionCandidate, candidateIDs map[int]bool, platform Platform) []DeletionCandidate {
 	for i := range candidates {
 		refs, err := platform.GetReferencedBy(candidates[i].Subject, candidates[i].Version)

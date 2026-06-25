@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/confluentinc/schema-deletion-tool/pkg"
 	"github.com/spf13/cobra"
@@ -22,6 +23,7 @@ func runScan(cmd *cobra.Command, _ []string) error {
 	outputFile, _ := cmd.Flags().GetString("output")
 	force, _ := cmd.Flags().GetBool("force")
 	workers, _ := cmd.Flags().GetInt("workers")
+	scanTimeout, _ := cmd.Flags().GetDuration("scan-timeout")
 	srURL, _ := cmd.Flags().GetString("sr-url")
 	srAPIKey, _ := cmd.Flags().GetString("sr-api-key")
 	srAPISecret, _ := cmd.Flags().GetString("sr-api-secret")
@@ -31,6 +33,9 @@ func runScan(cmd *cobra.Command, _ []string) error {
 	}
 	if workers > 100 {
 		workers = 100
+	}
+	if scanTimeout <= 0 {
+		return errors.New("--scan-timeout must be positive")
 	}
 
 	// Validate scan-specific flags
@@ -115,9 +120,25 @@ func runScan(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Scan topics for active schema IDs
-	activeSchemas, err := scanTopicsForActiveSchemas(topicsWithCluster, platform, ctx, workers)
+	activeSchemas, failedTopics, err := scanTopicsForActiveSchemas(topicsWithCluster, platform, ctx, workers, scanTimeout)
 	if err != nil {
 		return err
+	}
+
+	scannedTopics := make([]string, len(topicsWithCluster))
+	for i, t := range topicsWithCluster {
+		scannedTopics[i] = t.Topic
+	}
+
+	// Subjects tied to a topic we couldn't scan have unverifiable usage; block
+	// them so a partial scan can never delete a schema that is still in use.
+	unverifiedSubjects := pkg.SubjectsForFailedTopics(failedTopics, subjects, scannedTopics, strategy)
+	if len(failedTopics) > 0 {
+		fmt.Printf("\n%s%d topic(s) could not be scanned; %d subject(s) tied to them will be marked unverified and excluded from deletion:%s\n",
+			pkg.YELLOW, len(failedTopics), len(unverifiedSubjects), pkg.RESET)
+		for _, t := range failedTopics {
+			fmt.Printf("  - %s\n", t)
+		}
 	}
 
 	// Run safety analysis
@@ -128,6 +149,7 @@ func runScan(cmd *cobra.Command, _ []string) error {
 	}
 
 	candidates = pkg.CheckCompatibility(candidates, platform)
+	candidates = pkg.MarkUnverified(candidates, unverifiedSubjects)
 
 	if len(candidates) == 0 {
 		fmt.Println("No unused schemas found.")
@@ -138,16 +160,13 @@ func runScan(cmd *cobra.Command, _ []string) error {
 
 	// Write manifest if output specified
 	if outputFile != "" {
-		scannedTopics := make([]string, len(topicsWithCluster))
-		for i, t := range topicsWithCluster {
-			scannedTopics[i] = t.Topic
-		}
 		return pkg.WriteManifest(outputFile, candidates, pkg.ManifestOptions{
-			Platform:        platformFlag,
-			Strategy:        strategy,
-			ScannedTopics:   scannedTopics,
-			ScannedClusters: ctx.Clusters,
-			ActiveSchemaIDs: activeSchemas,
+			Platform:         platformFlag,
+			Strategy:         strategy,
+			ScannedTopics:    scannedTopics,
+			ScannedClusters:  ctx.Clusters,
+			ActiveSchemaIDs:  activeSchemas,
+			UnverifiedTopics: failedTopics,
 		})
 	}
 
@@ -161,6 +180,7 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 	fromFile, _ := cmd.Flags().GetString("from-file")
 	mode, _ := cmd.Flags().GetString("mode")
 	force, _ := cmd.Flags().GetBool("force")
+	allowUnverified, _ := cmd.Flags().GetBool("allow-unverified")
 
 	if platformFlag == "cp" && configFile == "" {
 		return errors.New("--config-file is required when --platform=cp")
@@ -186,6 +206,10 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	if err := failIfUnverified(manifest.UnverifiedTopics, allowUnverified); err != nil {
+		return err
+	}
+
 	platform, err := createPlatform(platformFlag, configFile, "", "", "")
 	if err != nil {
 		return err
@@ -193,6 +217,26 @@ func runDelete(cmd *cobra.Command, _ []string) error {
 
 	fmt.Printf("Loaded manifest with %d candidate(s) (generated %s)\n", len(manifest.Candidates), manifest.GeneratedAt)
 	return pkg.ExecuteDeletion(manifest.Candidates, platform, softDelete, hardDelete, force)
+}
+
+// failIfUnverified blocks deletion from a manifest produced by an incomplete
+// scan unless --allow-unverified is set. --force deliberately does not bypass
+// this: automation routinely passes --force, so deleting from a partial scan
+// must be its own explicit opt-in.
+func failIfUnverified(unverifiedTopics []string, allowUnverified bool) error {
+	if len(unverifiedTopics) == 0 {
+		return nil
+	}
+	fmt.Printf("%sManifest lists %d topic(s) that could not be scanned; their schema usage is unverified:%s\n",
+		pkg.RED, len(unverifiedTopics), pkg.RESET)
+	for _, t := range unverifiedTopics {
+		fmt.Printf("  - %s\n", t)
+	}
+	if !allowUnverified {
+		return errors.New("refusing to delete from a manifest with unverified topics; re-scan those topics, or pass --allow-unverified to delete the verified-safe schemas anyway")
+	}
+	fmt.Printf("%s--allow-unverified set: proceeding with deletion of verified-safe schemas.%s\n", pkg.YELLOW, pkg.RESET)
+	return nil
 }
 
 func createPlatform(platformFlag, configFile, srURL, srAPIKey, srAPISecret string) (pkg.Platform, error) {
@@ -285,9 +329,22 @@ func setupContext(platform pkg.Platform, platformFlag, configFile string, force 
 	return ctx, ctx.SetClusters(clusterIDs, force)
 }
 
-func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.Platform, ctx *pkg.Context, workers int) (map[int32]int, error) {
+// scanResult is the outcome of scanning a single topic.
+type scanResult struct {
+	schemas map[int32]int
+	err     error
+	topic   string
+	cluster string
+}
+
+// scanTopicsForActiveSchemas scans every topic and returns the merged active
+// schema IDs plus the names of topics that could not be scanned. Per-topic
+// failures do not abort the run; callers must treat schemas tied to the returned
+// failedTopics as unverified. A non-nil error is only returned for setup
+// failures that prevent scanning entirely (e.g. cluster endpoint resolution).
+func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.Platform, ctx *pkg.Context, workers int, scanTimeout time.Duration) (map[int32]int, []string, error) {
 	if len(topics) == 0 {
-		return make(map[int32]int), nil
+		return make(map[int32]int), nil, nil
 	}
 
 	// Resolve endpoints per cluster (cache to avoid repeated calls)
@@ -296,19 +353,13 @@ func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.
 		if _, ok := endpoints[topic.ClusterID]; !ok {
 			endpoint, err := platform.DescribeCluster(topic.ClusterID)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			endpoints[topic.ClusterID] = endpoint
 		}
 	}
 
 	// Scan topics concurrently
-	type scanResult struct {
-		schemas map[int32]int
-		err     error
-		topic   string
-	}
-
 	results := make(chan scanResult, len(topics))
 	sem := make(chan struct{}, workers)
 
@@ -322,34 +373,54 @@ func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.
 			creds := ctx.Credentials[t.ClusterID]
 			ccfg, err := platform.CreateConsumerConfig(t.ClusterID, creds)
 			if err != nil {
-				results <- scanResult{err: err, topic: t.Topic}
+				results <- scanResult{err: err, topic: t.Topic, cluster: t.ClusterID}
 				return
 			}
 			if err = ccfg.SetKey("bootstrap.servers", endpoints[t.ClusterID]); err != nil {
-				results <- scanResult{err: err, topic: t.Topic}
+				results <- scanResult{err: err, topic: t.Topic, cluster: t.ClusterID}
 				return
 			}
 
 			consumer, err := pkg.CreateConsumerFromConfig(ccfg)
 			if err != nil {
-				results <- scanResult{err: err, topic: t.Topic}
+				results <- scanResult{err: err, topic: t.Topic, cluster: t.ClusterID}
 				return
 			}
 			defer consumer.Close()
 
-			topicSchemas, err := pkg.ScanActiveSchemas(consumer, t.Topic)
-			results <- scanResult{schemas: topicSchemas, err: err, topic: t.Topic}
+			topicSchemas, err := pkg.ScanActiveSchemas(consumer, t.Topic, scanTimeout)
+			results <- scanResult{schemas: topicSchemas, err: err, topic: t.Topic, cluster: t.ClusterID}
 		}(topic)
 	}
 
-	// Collect results
-	activeSchemas := make(map[int32]int)
-	var firstErr error
+	// Collect every result before deciding. A single unscannable topic must not
+	// discard the work done for the others, and the user should see all failures
+	// at once instead of fixing them one re-run at a time.
+	collected := make([]scanResult, 0, len(topics))
 	for i := 0; i < len(topics); i++ {
 		r := <-results
 		if r.err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("error scanning topic %s: %w", r.topic, r.err)
+			fmt.Printf("%swarning: failed to scan topic %s (cluster %s): %v%s\n", pkg.YELLOW, r.topic, r.cluster, r.err, pkg.RESET)
+		}
+		collected = append(collected, r)
+	}
+
+	activeSchemas, failedTopics := mergeActiveSchemas(collected)
+	return activeSchemas, failedTopics, nil
+}
+
+// mergeActiveSchemas OR-merges per-topic schema results and returns the names of
+// topics that failed to scan.
+func mergeActiveSchemas(results []scanResult) (map[int32]int, []string) {
+	activeSchemas := make(map[int32]int)
+	var failedTopics []string
+	seenFailed := make(map[string]bool)
+	for _, r := range results {
+		if r.err != nil {
+			// The same topic can fail in more than one cluster; report it once.
+			if !seenFailed[r.topic] {
+				seenFailed[r.topic] = true
+				failedTopics = append(failedTopics, r.topic)
 			}
 			continue
 		}
@@ -357,11 +428,7 @@ func scanTopicsForActiveSchemas(topics []pkg.TopicWithClusterInfo, platform pkg.
 			activeSchemas[k] = activeSchemas[k] | v
 		}
 	}
-
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	return activeSchemas, nil
+	return activeSchemas, failedTopics
 }
 
 func printCandidateSummary(candidates []pkg.DeletionCandidate) {
@@ -379,7 +446,7 @@ func printCandidateSummary(candidates []pkg.DeletionCandidate) {
 	}
 }
 
-func Execute() {
+func newRootCmd() *cobra.Command {
 	var rootCmd = &cobra.Command{
 		Use:   "confluent schema-registry cleanup",
 		Short: "Schema deletion tool - discover and delete unused schemas",
@@ -416,6 +483,7 @@ file that can be passed to the delete command.`,
 	scanCmd.Flags().Bool("all-topics", false, "Scan all topics across all clusters.")
 	scanCmd.Flags().String("context", "", "Schema context to scope operations to (e.g., 'staging').")
 	scanCmd.Flags().Int("workers", 25, "Number of concurrent topic scanners.")
+	scanCmd.Flags().Duration("scan-timeout", 5*time.Minute, "Per-topic scan deadline; topics exceeding it are marked unverified and excluded from deletion.")
 	scanCmd.Flags().String("output", "", "Path to write manifest file.")
 	scanCmd.Flags().String("sr-url", "", "Schema Registry URL (enables reference checking for Cloud).")
 	scanCmd.Flags().String("sr-api-key", "", "Schema Registry API key (for reference checking).")
@@ -437,11 +505,15 @@ Deletion modes:
 	}
 	deleteCmd.Flags().String("from-file", "", "Path to manifest file from scan (required).")
 	deleteCmd.Flags().String("mode", "soft", "Deletion mode: 'soft', 'hard', or 'full'.")
+	deleteCmd.Flags().Bool("allow-unverified", false, "Delete verified-safe schemas even when the manifest has unverified topics (an incomplete scan). Not bypassed by --force.")
 	deleteCmd.MarkFlagRequired("from-file")
 
 	rootCmd.AddCommand(scanCmd, deleteCmd)
+	return rootCmd
+}
 
-	if err := rootCmd.Execute(); err != nil {
+func Execute() {
+	if err := newRootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
 }

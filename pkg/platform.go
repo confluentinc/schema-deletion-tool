@@ -102,6 +102,7 @@ const (
 	StatusBlockedByMigrationChain CandidateStatus = "blocked_by_migration_chain"
 	StatusBlockedByEncryption     CandidateStatus = "blocked_by_encryption_rules"
 	StatusBlockedByRuleReference  CandidateStatus = "blocked_by_rule_reference"
+	StatusBlockedUnverified       CandidateStatus = "blocked_unverified"
 	StatusWarnHasDomainRules      CandidateStatus = "has_domain_rules"
 	StatusWarnHasMigrationRules   CandidateStatus = "has_migration_rules"
 )
@@ -122,7 +123,7 @@ type DeletionCandidate struct {
 func (c *DeletionCandidate) IsBlocked() bool {
 	switch c.Status {
 	case StatusBlockedByReferences, StatusBlockedByMigrationChain,
-		StatusBlockedByEncryption, StatusBlockedByRuleReference:
+		StatusBlockedByEncryption, StatusBlockedByRuleReference, StatusBlockedUnverified:
 		return true
 	}
 	return false
@@ -142,9 +143,10 @@ type Manifest struct {
 	SRUrl           string              `json:"sr_url,omitempty"`
 	Environment     string              `json:"environment,omitempty"`
 	Candidates      []DeletionCandidate `json:"candidates"`
-	ScannedTopics   []string            `json:"scanned_topics,omitempty"`
-	ScannedClusters []string            `json:"scanned_clusters,omitempty"`
-	ActiveSchemaIDs []int32             `json:"active_schema_ids,omitempty"`
+	ScannedTopics    []string           `json:"scanned_topics,omitempty"`
+	ScannedClusters  []string           `json:"scanned_clusters,omitempty"`
+	ActiveSchemaIDs  []int32            `json:"active_schema_ids,omitempty"`
+	UnverifiedTopics []string           `json:"unverified_topics,omitempty"`
 }
 
 // CPClusterConfig holds configuration for a single CP Kafka cluster.

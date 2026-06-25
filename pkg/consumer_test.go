@@ -8,15 +8,83 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCompareOffsets(t *testing.T) {
+func TestAllPartitionsReachedEOF(t *testing.T) {
 	req := require.New(t)
-	req.True(checkIfReachesOffsets(map[int32]kafka.Offset{0: kafka.OffsetEnd}, map[int32]kafka.Offset{}, 1))
-	req.True(checkIfReachesOffsets(map[int32]kafka.Offset{0: kafka.OffsetEnd}, map[int32]kafka.Offset{0: 0}, 1))
-	req.False(checkIfReachesOffsets(map[int32]kafka.Offset{0: 0}, map[int32]kafka.Offset{}, 1))
-	req.True(checkIfReachesOffsets(map[int32]kafka.Offset{0: 2}, map[int32]kafka.Offset{0: 2}, 1))
-	req.False(checkIfReachesOffsets(map[int32]kafka.Offset{0: 2}, map[int32]kafka.Offset{0: 1}, 1))
-	req.False(checkIfReachesOffsets(map[int32]kafka.Offset{0: 2, 1: 4}, map[int32]kafka.Offset{0: 1, 1: 4}, 2))
-	req.False(checkIfReachesOffsets(map[int32]kafka.Offset{0: 2, 1: 4}, map[int32]kafka.Offset{0: 1, 1: 4}, 2))
+	// No partitions: vacuously done.
+	req.True(allPartitionsReachedEOF(map[int32]bool{}, 0))
+	// Single partition not yet at EOF.
+	req.False(allPartitionsReachedEOF(map[int32]bool{}, 1))
+	req.False(allPartitionsReachedEOF(map[int32]bool{0: false}, 1))
+	// Single partition at EOF.
+	req.True(allPartitionsReachedEOF(map[int32]bool{0: true}, 1))
+	// Multi-partition: all must be at EOF.
+	req.False(allPartitionsReachedEOF(map[int32]bool{0: true}, 2))
+	req.False(allPartitionsReachedEOF(map[int32]bool{0: true, 1: false}, 2))
+	req.True(allPartitionsReachedEOF(map[int32]bool{0: true, 1: true}, 2))
+}
+
+func TestHandlePollEvent_Message(t *testing.T) {
+	req := require.New(t)
+	active := make(map[int32]int)
+	eof := make(map[int32]bool)
+
+	value := make([]byte, MessageOffset)
+	value[0] = MagicByte
+	binary.BigEndian.PutUint32(value[1:MessageOffset], 7)
+
+	req.NoError(handlePollEvent(&kafka.Message{Value: value}, "orders", active, eof, map[kafka.ErrorCode]bool{}))
+	req.Equal(VALUEONLY, active[7])
+	req.Empty(eof)
+}
+
+func TestHandlePollEvent_PartitionEOF(t *testing.T) {
+	req := require.New(t)
+	active := make(map[int32]int)
+	eof := make(map[int32]bool)
+
+	req.NoError(handlePollEvent(kafka.PartitionEOF{Partition: 2}, "orders", active, eof, map[kafka.ErrorCode]bool{}))
+	req.True(eof[2])
+	req.Empty(active)
+}
+
+func TestHandlePollEvent_FatalErrorReturned(t *testing.T) {
+	req := require.New(t)
+	err := handlePollEvent(kafka.NewError(kafka.ErrAllBrokersDown, "down", true),
+		"orders", make(map[int32]int), make(map[int32]bool), map[kafka.ErrorCode]bool{})
+	req.Error(err)
+}
+
+func TestHandlePollEvent_TerminalAuthErrorReturned(t *testing.T) {
+	req := require.New(t)
+	for code := range terminalScanErrors {
+		// A non-fatal auth/authz error still terminates the scan (won't resolve on retry).
+		err := handlePollEvent(kafka.NewError(code, "denied", false),
+			"orders", make(map[int32]int), make(map[int32]bool), map[kafka.ErrorCode]bool{})
+		req.Errorf(err, "expected error for code %v", code)
+	}
+}
+
+func TestHandlePollEvent_NonFatalErrorLoggedOncePerCode(t *testing.T) {
+	req := require.New(t)
+	eof := make(map[int32]bool)
+	logged := make(map[kafka.ErrorCode]bool)
+	e := kafka.NewError(kafka.ErrOffsetOutOfRange, "transient", false)
+
+	req.NoError(handlePollEvent(e, "orders", make(map[int32]int), eof, logged))
+	req.Empty(eof) // a non-fatal error must not be mistaken for EOF
+	req.True(logged[kafka.ErrOffsetOutOfRange])
+
+	// A repeat of the same code is deduped and still returns no error.
+	req.NoError(handlePollEvent(e, "orders", make(map[int32]int), eof, logged))
+}
+
+func TestHandlePollEvent_NilTimeout(t *testing.T) {
+	req := require.New(t)
+	active := make(map[int32]int)
+	eof := make(map[int32]bool)
+	req.NoError(handlePollEvent(nil, "orders", active, eof, map[kafka.ErrorCode]bool{}))
+	req.Empty(active)
+	req.Empty(eof)
 }
 
 func TestExtractSchemaIDFromPayload_Valid(t *testing.T) {

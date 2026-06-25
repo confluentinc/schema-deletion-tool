@@ -253,6 +253,14 @@ func (c *CloudPlatform) CreateConsumerConfig(clusterID string, creds Credentials
 	if err := ccfg.SetKey("auto.offset.reset", "earliest"); err != nil {
 		return nil, err
 	}
+	if err := ccfg.SetKey("enable.partition.eof", true); err != nil {
+		return nil, err
+	}
+	// EOF-based scan termination needs partition EOF at the last stable offset;
+	// pin this rather than rely on the librdkafka default.
+	if err := ccfg.SetKey("isolation.level", "read_committed"); err != nil {
+		return nil, err
+	}
 	return ccfg, nil
 }
 

@@ -30,6 +30,68 @@ func VerifySubjectForStrategy(subject string, strategy string) bool {
 	}
 }
 
+// SubjectsForFailedTopics returns the subset of allSubjects that resolve to one
+// of failedTopics under the given naming strategy. These subjects could not have
+// their usage verified and must be protected from deletion.
+//
+// For record-name, subjects are not tied to topics by name and active schema IDs
+// are tracked globally, so any unscannable topic leaves every subject unverifiable.
+func SubjectsForFailedTopics(failedTopics, allSubjects, allTopics []string, strategy string) map[string]bool {
+	unverified := make(map[string]bool)
+	if len(failedTopics) == 0 {
+		return unverified
+	}
+
+	failedSet := make(map[string]bool, len(failedTopics))
+	for _, t := range failedTopics {
+		failedSet[t] = true
+	}
+
+	switch strategy {
+	case "record-name":
+		for _, s := range allSubjects {
+			unverified[s] = true
+		}
+	case "topic-record-name":
+		sortedTopics := topicsByDescendingLength(allTopics)
+		for _, s := range allSubjects {
+			if t, ok := longestPrefixTopic(GetRawSubject(s), sortedTopics); ok && failedSet[t] {
+				unverified[s] = true
+			}
+		}
+	default: // topic-name
+		for _, s := range allSubjects {
+			if failedSet[TopicFromSubject(s)] {
+				unverified[s] = true
+			}
+		}
+	}
+	return unverified
+}
+
+// topicsByDescendingLength returns a copy of topics sorted longest-first, so a
+// prefix scan finds the most specific match first (TopicRecordNameStrategy).
+func topicsByDescendingLength(topics []string) []string {
+	sorted := make([]string, len(topics))
+	copy(sorted, topics)
+	sort.Slice(sorted, func(i, j int) bool {
+		return len(sorted[i]) > len(sorted[j])
+	})
+	return sorted
+}
+
+// longestPrefixTopic returns the longest topic in sortedTopics (which must be
+// sorted longest-first) that is a prefix of raw followed by '-', matching how
+// TopicRecordNameStrategy names subjects as "<topic>-<record>".
+func longestPrefixTopic(raw string, sortedTopics []string) (string, bool) {
+	for _, t := range sortedTopics {
+		if strings.HasPrefix(raw, t+"-") {
+			return t, true
+		}
+	}
+	return "", false
+}
+
 // ResolveTopics determines which topics to scan based on the naming strategy.
 func ResolveTopics(subjects []string, strategy string, explicitTopics []string, scanAllTopics bool, platform Platform, clusters []string) ([]TopicWithClusterInfo, error) {
 	if len(explicitTopics) > 0 {
@@ -121,25 +183,17 @@ func resolveTopicRecordName(subjects []string, platform Platform, clusters []str
 		}
 	}
 
-	// Sort topics by length descending for longest-prefix matching
-	sortedTopics := make([]string, 0, len(allTopics))
+	topicNames := make([]string, 0, len(allTopics))
 	for t := range allTopics {
-		sortedTopics = append(sortedTopics, t)
+		topicNames = append(topicNames, t)
 	}
-	sort.Slice(sortedTopics, func(i, j int) bool {
-		return len(sortedTopics[i]) > len(sortedTopics[j])
-	})
+	sortedTopics := topicsByDescendingLength(topicNames)
 
 	// Match subjects to topics
 	matchedTopics := make(map[string]bool)
 	for _, subject := range subjects {
-		rawSubject := GetRawSubject(subject)
-
-		for _, topic := range sortedTopics {
-			if strings.HasPrefix(rawSubject, topic+"-") {
-				matchedTopics[topic] = true
-				break // Longest match found
-			}
+		if topic, ok := longestPrefixTopic(GetRawSubject(subject), sortedTopics); ok {
+			matchedTopics[topic] = true
 		}
 	}
 

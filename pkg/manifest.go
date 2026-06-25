@@ -23,10 +23,11 @@ func WriteManifest(path string, candidates []DeletionCandidate, opts ManifestOpt
 		Strategy:        opts.Strategy,
 		SRUrl:           opts.SRUrl,
 		Environment:     opts.Environment,
-		Candidates:      candidates,
-		ScannedTopics:   opts.ScannedTopics,
-		ScannedClusters: opts.ScannedClusters,
-		ActiveSchemaIDs: activeIDs,
+		Candidates:       candidates,
+		ScannedTopics:    opts.ScannedTopics,
+		ScannedClusters:  opts.ScannedClusters,
+		ActiveSchemaIDs:  activeIDs,
+		UnverifiedTopics: opts.UnverifiedTopics,
 	}
 
 	data, err := json.MarshalIndent(manifest, "", "  ")
@@ -115,13 +116,14 @@ func GetWarnedCandidates(candidates []DeletionCandidate) []DeletionCandidate {
 
 // ManifestOptions holds metadata for manifest generation.
 type ManifestOptions struct {
-	Platform        string
-	Strategy        string
-	SRUrl           string
-	Environment     string
-	ScannedTopics   []string
-	ScannedClusters []string
-	ActiveSchemaIDs map[int32]int
+	Platform         string
+	Strategy         string
+	SRUrl            string
+	Environment      string
+	ScannedTopics    []string
+	ScannedClusters  []string
+	ActiveSchemaIDs  map[int32]int
+	UnverifiedTopics []string
 }
 
 // ExecuteDeletion performs soft-delete and/or hard-delete on candidates.
