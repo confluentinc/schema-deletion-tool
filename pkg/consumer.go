@@ -113,7 +113,7 @@ func handlePollEvent(event kafka.Event, topic string, activeSchemas map[int32]in
 	case kafka.PartitionEOF:
 		eofPartitions[e.Partition] = true
 	case kafka.Error:
-		if e.IsFatal() {
+		if e.IsFatal() || terminalScanErrors[e.Code()] {
 			return e
 		}
 		if !loggedErrs[e.Code()] {
@@ -122,6 +122,17 @@ func handlePollEvent(event kafka.Event, topic string, activeSchemas map[int32]in
 		}
 	}
 	return nil
+}
+
+// terminalScanErrors are auth/authz failures that retrying within the scan
+// cannot resolve, so the topic fails immediately instead of polling until the
+// deadline.
+var terminalScanErrors = map[kafka.ErrorCode]bool{
+	kafka.ErrTopicAuthorizationFailed:   true,
+	kafka.ErrClusterAuthorizationFailed: true,
+	kafka.ErrGroupAuthorizationFailed:   true,
+	kafka.ErrSaslAuthenticationFailed:   true,
+	kafka.ErrAuthentication:             true,
 }
 
 // extractSchemaIDFromPayload extracts schema ID from the Confluent wire format:

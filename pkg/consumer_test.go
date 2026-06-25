@@ -54,6 +54,16 @@ func TestHandlePollEvent_FatalErrorReturned(t *testing.T) {
 	req.Error(err)
 }
 
+func TestHandlePollEvent_TerminalAuthErrorReturned(t *testing.T) {
+	req := require.New(t)
+	for code := range terminalScanErrors {
+		// A non-fatal auth/authz error still terminates the scan (won't resolve on retry).
+		err := handlePollEvent(kafka.NewError(code, "denied", false),
+			"orders", make(map[int32]int), make(map[int32]bool), map[kafka.ErrorCode]bool{})
+		req.Errorf(err, "expected error for code %v", code)
+	}
+}
+
 func TestHandlePollEvent_NonFatalErrorLoggedOncePerCode(t *testing.T) {
 	req := require.New(t)
 	eof := make(map[int32]bool)
